@@ -95,56 +95,62 @@ MAIN:
 
 
 UPDATE_DECA:
-	mov R3, DECA_STATE
-	
-	;jnb P0.0, cont5
-	;	clr P0.0 				; "unset" the decatron
-	;cont5: 
+	; This function sequentially cycles through any active (as dictated by SECONDS)
+	; decatron cathodes to ravel and unravel the appropriate number of seconds.
+	; DECA_STATE points to the next cathode (Kx, G1, or G2) that is to be illuminated.
+	; DECA_TOGGLE is called when the direction of the cathode swiping is to be flipped (R4 = 0).
+	; On a change of direction, the end cathode remains illuminated for the next cycle.
+	; DECA_FORWARDS? keeps track of the direction of the cathode swiping.
+	; SECONDS_BUFFER ensures the correct direction of raveling/unraveling.
 
-	djnz R4, cont4
-		lcall DECA_TOGGLE
-		sjmp cont3				; TRY BOTH WITH AND WITHOUT THIS LINE
+	; R4 stores the count of how many cathodes need to be lit up before switching directions.
+	; R3 stores DECA_STATE.
+
+	
+	mov R3, DECA_STATE				; move DECA_STATE to R3
+
+	djnz R4, cont4 					; decrement R4 by 1, and check if it is zero
+		lcall DECA_TOGGLE			; if R4 is zero, toggle the deca (call DECA_TOGGLE)
+		sjmp cont3 					; jump to the end of UPDATE_DECA
 	cont4:
 
-	cjne R3, #00h, cont1
-		; arc jumps to G1
-		jb DECA_FORWARDS?, cont6
-			setb P0.1
-			clr P0.2
-			mov DECA_STATE, #02h
-			sjmp cont1
+	cjne R3, #00h, cont1 			; if we are in DECA_STATE 0, jump the arc to G1
+		jb DECA_FORWARDS?, cont6 	; check direction of swiping
+			; if swiping counter-clockwise
+			setb P0.1 				; pull G1 low (note inverter between 8051 pin and decatron)
+			clr P0.2				; pull G2 high (note inverter between 8051 pin and decatron)
+			mov DECA_STATE, #02h 	; DECA_STATE: 0 --> 2
+			sjmp cont3 				; exit
 		cont6:
-		; Pull G1 low (note inverter between 8051 pin and decatron)
-		setb P0.1
-		inc DECA_STATE
+		; if swiping clockwise
+		setb P0.1 					; pull G1 high (note inverter between 8051 pin and decatron)
+		inc DECA_STATE 				; DECA_STATE:  0 --> 1
 	cont1:
 
-	cjne R3, #01h, cont2
-		; arc jumps to G2
-		jb DECA_FORWARDS?, cont7
-			setb P0.2
-			dec DECA_STATE
-			sjmp cont2
+	cjne R3, #01h, cont2 			; if we are in DECA_STATE 1, jump the arc to G2
+		jb DECA_FORWARDS?, cont7 	; check direction of swiping
+			; if swiping counter-clockwise
+			setb P0.2 				; pull G2 low (note inverter between 8051 pin and decatron)
+			dec DECA_STATE 			; DECA_STATE:  1 --> 0
+			sjmp cont3 				; exit
 		cont7:
-		; Pull G2 low (note inverter between 8051 pin and decatron)
-		setb P0.2
-		; pull G1 high again
-		clr P0.1
-		inc DECA_STATE
+		; if swiping clockwise
+		setb P0.2 					; pull G2 high (note inverter between 8051 pin and decatron)
+		clr P0.1 					; pull G1 high (note inverter between 8051 pin and decatron)
+		inc DECA_STATE 				; DECA_STATE:  1 --> 2
 	cont2:
 
-	cjne R3, #02h, cont3
-		; arc jumps to Kx
-		jb DECA_FORWARDS?, cont8
-			clr P0.1
-			dec DECA_STATE
-			sjmp cont3
+	cjne R3, #02h, cont3 			; if we are in DECA_STATE 1, jump the arc to Kx
+		jb DECA_FORWARDS?, cont8 	; check direction of swiping
+			; if swiping counter-clockwise
+			clr P0.1 				; pull G1 high (note inverter between 8051 pin and decatron)
+			dec DECA_STATE 			; DECA_STATE:  2 --> 1
+			sjmp cont3 				; exit
 		cont8:
-		; pull G2 high again
-		clr P0.2
-		mov DECA_STATE, #00h
+		; if swiping clockwise
+		clr P0.2 					; pull G2 high (note inverter between 8051 pin and decatron)
+		mov DECA_STATE, #00h 		; DECA_STATE:  2 --> 0
 	cont3:
-
 
 	; ==================
 	; Display DECA_STATE on nixie

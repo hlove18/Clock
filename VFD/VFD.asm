@@ -90,7 +90,7 @@ MAIN:
 
 
 UPDATE_VFD:
-	; This function squentially cycles through each VFD grid and applies the appropriate
+	; This function sequentially cycles through each VFD grid and applies the appropriate
 	; signal to display the correct number (illuminate the correct segments) for each grid.
 	; For each numeral/grid, three bytes of data are sent:
 	; Byte 1 (GRID_EN_1):
