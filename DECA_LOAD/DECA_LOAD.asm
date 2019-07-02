@@ -56,7 +56,9 @@ INIT:
 	.equ DECA_FORWARDS?, 21h.0
 
 	.equ SECONDS, 22h
+	.equ SECONDS_BUFFER, 23h
 	mov SECONDS, #01h
+	mov SECONDS_BUFFER, SECONDS
 	
 	; Initalize the DECATRON
 	lcall DECA_INIT
@@ -80,9 +82,15 @@ INIT:
 	sjmp MAIN
 
 MAIN:
-	;lcall LONG_DELAY
-	;lcall LONG_DELAY
-	;inc SECONDS
+
+	lcall LONG_DELAY
+	lcall LONG_DELAY
+	lcall LONG_DELAY
+	inc SECONDS
+	mov R7, SECONDS
+	cjne R7, #3Ch, cont19
+		mov SECONDS, #01h
+	cont19:
 	sjmp MAIN
 
 
@@ -137,13 +145,14 @@ UPDATE_DECA:
 		mov DECA_STATE, #00h
 	cont3:
 
+
 	; ==================
 	; Display DECA_STATE on nixie
-	mov R5, #80h
-	mov a, DECA_STATE
-	orl a, R5
+	; mov R5, #80h
+	; mov a, DECA_STATE
+	; orl a, R5
 
-	mov P2, a
+	; mov P2, a
 	; ==================
 	
 ret
@@ -177,19 +186,54 @@ ret
 DECA_TOGGLE:
 	cpl DECA_FORWARDS? 		; toggle the decatron direction
 
-	mov R4, SECONDS
-	cjne R4, #01h, cont12
-		sjmp cont14
+	mov a, SECONDS   		; move SECONDS into the accumulator
+	cjne a, #01h, cont12	; if SECONDS = 1, then no need to toggle, skip to the end, otherwise, continue
+		mov R4, SECONDS 	; reload R4
+		sjmp cont14      	; jump to the very end
 	cont12:
+
+		; See if seconds is greater than or less than (or equal to) 30
+		clr c 				; clear the carry bit
+		mov a, #1Eh			; move 30 into the accumulator
+		subb a, SECONDS		; perform 30-SECONDS.  if SECONDS is greater than 30, the carry flag (c) will be set
+	
 		jb DECA_FORWARDS?, cont10
-			mov R3, DECA_STATE
-			inc R3
-			cjne R3, #03h, cont11
-				mov R3, #00h
-			cont11:
-			mov DECA_STATE, R3
-			ret
+			; if going from backwards to forwards
+
+			jnc cont16 	; if the carry flag is set, SECONDS > 30
+			; else if seconds are greater than 30:
+			clr c 				; clear the carry flag
+			mov a, #3Ch			; move 60 into the accumulator
+			subb a, SECONDS		; perform 60-SECONDS.
+			mov SECONDS_BUFFER, a
+
+
+			cont16:
+				; if seconds are less than or equal to 30:
+				mov R4, SECONDS_BUFFER 					; reload R4 with SECONDS_BUFFER
+
+				; update the DECA_STATE
+				mov R3, DECA_STATE
+				inc R3
+				cjne R3, #03h, cont11
+					mov R3, #00h
+				cont11:
+				mov DECA_STATE, R3
+				ret
 	cont10:
+		; if going from forwards to backwards
+		jnc cont17 	; if the carry flag is set, SECONDS > 30
+			; seconds are greater than 30
+			mov R4, SECONDS_BUFFER
+			sjmp cont18
+
+		cont17:
+		; if seconds are less than or equal to 30:
+		mov R4, SECONDS 						; update R4 with seconds
+		mov SECONDS_BUFFER, SECONDS 	 		; update the SECONDS_BUFFER with seconds
+
+		cont18:
+		; update the DECA_STATE
 		mov R3, DECA_STATE
 		dec R3
 		cjne R3, #0FFh, cont13
