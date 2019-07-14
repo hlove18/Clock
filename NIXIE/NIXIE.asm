@@ -60,11 +60,11 @@ INIT:
 	; to display on each repsective VFD grid
 	.equ NIX_INDX, 25h
 
-	; Intilize date with sample date: 03-11-16
-	mov NIX4, #09h
-	mov NIX3, #09h
-	mov NIX2, #09h
-	mov NIX1, #09h
+	; Intialize date with sample date: 03-11-16
+	mov NIX4, #04h
+	mov NIX3, #03h
+	mov NIX2, #02h
+	mov NIX1, #01h
 
 	; Initalize the VFD
 	lcall NIX_RESET
@@ -91,61 +91,69 @@ MAIN:
 
 
 UPDATE_NIX:
-	; This function squentially cycles through each VFD grid and applies the appropriate
-	; signal to display the correct number (illuminate the correct segments) for each grid.
-	; For each numeral/grid, three bytes of data are sent:
-	; Byte 1 (GRID_EN_1):
-	; | grid 9 | 0 | 0 | 0 | lost | lost | lost | lost |
-	; Byte 2 (GRID_EN_2):
-	; | grid 1 | grid 2 | grid 3 | grid 4 | grid 5 | grid 6 | grid 7 | grid 8 |
-	; Byte 3:
-	; | a | b | c | d | e | f | g | dp |
-	; A VFD_NUM (@R1) value of #0Ah corresponds to a "-" for grids 1-9
-	; A VFD_NUM (@R1) value of #0Bh corresponds to a "*" for grid 9
+	; This function sequentially cycles through each nixie bulb and applies the appropriate
+	; signal to display the correct number (illuminate the correct cathode) for each bulb.
+	; For each bulb, one byte of data is sent:
+	; Byte 1:
+	; |<- High Nibble ->|<- Low Nibble ->|
+	; |      NIX_EN     |     number     |
+	; NIX_EN:
+	;   1000 - NIX1 displays number
+	;   0100 - NIX2 displays number
+	;   0010 - NIX3 displays number
+	;   0001 - NIX4 displays number
 
-	;push R1						; push R1 onto the stack to preserve its value
-	;push a 						; push a onto the stack to preserve its value
+	; R1 stores NIX_INDX.
 
-	; move the contents of the respective grid into VFD_NUM (the number to be displayed - @R1)
-	mov R1, NIX_INDX 			; move GRID_INX into R1
-	inc NIX_INDX				; increment the grid index (to access next grid memory location)
+	; push any used SFRs onto the stack to preserve their values
+	push 1
+	push acc
 
-	mov a, NIX_EN
-	orl a, @R1
-	mov P2, #00h
-	lcall DELAY
-	mov P2, a
+	clr c 						; clear the carry flag
 
-	; Now we prepare for the next cycle
-	mov a, NIX_EN					; move GRID_EN_1 into accumulator
-	rlc a 								; rotate the accumlator left through carry (NOTE! the carry flag gets rotated into bit 0)
-	mov NIX_EN, a 					; move the rotated result back into GRID_EN_1					
-	jnc cont12 						; check if a complete grid cycle has finished (GRID_INDX == #29h)
-		clr c
-		lcall NIX_RESET					; reset the VFD cycle
-	cont12:
+	mov R1, NIX_INDX 			; move NIX_INDX into R1
+	inc NIX_INDX				; increment NIX_INDX (to access next nixie bulb memory location)
 
-	;pop a 					; restore value of a to value before UPDATE_VFD was called
-	;pop R1					; restore value of R1 to value before UPDATE_VFD was called
+	mov a, NIX_EN 				; move NIX_EN into accumulator
+	orl a, @R1 					; bitwise or the accumulator (NIX_EN) with @R1 (@NIX_INDX)
+	mov P2, #00h 				; clear all nixies
+	lcall DELAY 				; wait
+	mov P2, a 					; light up the appropriate nixie
 
-ret
+	; prepare for the next cycle
+	mov a, NIX_EN				; move NIX_EN into accumulator
+	rlc a 						; rotate the accumulator left through carry (NOTE! the carry flag gets rotated into bit 0)
+	mov NIX_EN, a 				; move the rotated result back into NIX_EN
+	jnc update_nix_cont1 		; check if a complete nixie cycle has finished (the carry flag has been set)
+		clr c 					; clear the carry flag
+		lcall NIX_RESET			; reset the nixie cycle
+	update_nix_cont1:
+
+	; pop the original SFR values back into their place and restore their values
+	pop acc
+	pop 1
+
+	ret
+
 
 DELAY:
-	;push R0 				; push R0 onto the stack to preserve its value
-	mov R0, #0FFh			; load R0 for 255 counts
-	loop0:
-	djnz R0, loop0
-	;pop	R0					; restore value of R0 to value before DELAY was called
-ret
+	push 0 						; push R0 onto the stack to preserve its value
+	
+	mov R0, #0FFh				; load R0 for 255 counts
+	delay_loop1:
+	djnz R0, delay_loop1
+	
+	pop	0						; restore value of R0 to value before DELAY was called
+	
+	ret
+
 
 NIX_RESET:
-	; This function resets the VFD registers after a complete cycle
+	; This function resets the nixie registers after a complete cycle
+	mov NIX_EN, #10h			; initialize nixie enable nibble
+	mov NIX_INDX, #20h 			; initalize nixie index (start with nixie 4). This should reflect the memory location of NIX4.
 
-	; Initalize grid index (start with grid 9)
-	mov NIX_EN, #10h
-	mov NIX_INDX, #20h 	; corresponds to memory location of GRID9
-
-ret
+	ret
 
 end
 

@@ -7,29 +7,11 @@
 ; R0 - used in delay fxn
 ; R1 - used in VFD ISR
 
-; ======Loops======
-; loop0
-
-
-; ======Continues======
-; cont0
-; cont1
-; cont2
-; cont3
-; cont4
-; cont5
-; cont6
-; cont7
-; cont8
-; cont9
-; cont10
-; cont11
-; cont12
 
 
 ; !!!!! Switches on the built-in 8052 special function register and interrupt symbol definitions.
 ; This command must preceed any non-control lines in the code.
-$MOD52
+$MOD52						; MEGA COMMAND GETS US MORE RAM #frickinheckers
 
 .org 0
 ljmp INIT
@@ -114,113 +96,125 @@ UPDATE_VFD:
 	; A VFD_NUM (@R1) value of #0Ah corresponds to a "-" for grids 1-9
 	; A VFD_NUM (@R1) value of #0Bh corresponds to a "*" for grid 9
 
-	;push R1						; push R1 onto the stack to preserve its value
-	;push a 						; push a onto the stack to preserve its value
+	; push any used SFRs onto the stack to preserve their values
+	push 1
+	push acc
 
 	; move the contents of the respective grid into VFD_NUM (the number to be displayed - @R1)
-	mov R1, GRID_INDX 			; move GRID_INX into R1
-	inc GRID_INDX				; increment the grid index (to access next grid memory location)
+	mov R1, GRID_INDX 					; move GRID_INX into R1
+	inc GRID_INDX						; increment the grid index (to access next grid memory location)
 
 
-	; The first two bytes of serial data are the independent of the numeral
-	mov SBUF, GRID_EN_1 		; send the first byte down the serial line
-	jnb TI, $ 					; wait for the entire byte to be sent
-	clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	mov SBUF, GRID_EN_2			; send the second byte down the serial line
-	jnb TI, $ 					; wait for the entire byte to be sent
-	clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	; the first two bytes of serial data are independent of the numeral to be shown
+	mov SBUF, GRID_EN_1 				; send the first byte down the serial line
+	jnb TI, $ 							; wait for the entire byte to be sent
+	clr TI 								; the transmit interrupt flag is set by hardware but must be cleared by software
+	mov SBUF, GRID_EN_2					; send the second byte down the serial line
+	jnb TI, $ 							; wait for the entire byte to be sent
+	clr TI 								; the transmit interrupt flag is set by hardware but must be cleared by software
 
-	; The third byte of serial data depends on the numeral to be shown
+	; the third byte of serial data depends on the numeral to be shown
 	
 	; "0" numeral
-	cjne @R1, #00h, cont0
-		mov SBUF, #0FCh				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont0:
+	cjne @R1, #00h, update_vfd_cont1
+		mov SBUF, #0FCh					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont1:
 
 	; "1" numeral
-	cjne @R1, #01h, cont1
-		mov SBUF, #060h				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont1:
+	cjne @R1, #01h, update_vfd_cont2
+		mov SBUF, #060h					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont2:
 
 	; "2" numeral
-	cjne @R1, #02h, cont2
-		mov SBUF, #0DAh				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont2:
+	cjne @R1, #02h, update_vfd_cont3
+		mov SBUF, #0DAh					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont3:
 
 	; "3" numeral
-	cjne @R1, #03h, cont3
-		mov SBUF, #0F2h				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont3:
+	cjne @R1, #03h, update_vfd_cont4
+		mov SBUF, #0F2h					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont4:
 
 	; "4" numeral
-	cjne @R1, #04h, cont4
-		mov SBUF, #66h				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont4:
+	cjne @R1, #04h, update_vfd_cont5
+		mov SBUF, #66h					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont5:
 
 	; "5" numeral
-	cjne @R1, #05h, cont5
-		mov SBUF, #0B6h				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont5:
+	cjne @R1, #05h, update_vfd_cont6
+		mov SBUF, #0B6h					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont6:
 
 	; "6" numeral
-	cjne @R1, #06h, cont6
-		mov SBUF, #0BEh				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont6:
+	cjne @R1, #06h, update_vfd_cont7
+		mov SBUF, #0BEh					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont7:
 
 	; "7" numeral
-	cjne @R1, #07h, cont7
-		mov SBUF, #0E0h				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont7:
+	cjne @R1, #07h, update_vfd_cont8
+		mov SBUF, #0E0h					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont8:
 
 	; "8" numeral
-	cjne @R1, #08h, cont8
-		mov SBUF, #0FEh				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont8:
+	cjne @R1, #08h, update_vfd_cont9
+		mov SBUF, #0FEh					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont9:
 
 	; "9" numeral
-	cjne @R1, #09h, cont9
-		mov SBUF, #0E6h				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont9:
+	cjne @R1, #09h, update_vfd_cont10
+		mov SBUF, #0E6h					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont10:
 
 	; "-" numeral
-	cjne @R1, #0Ah, cont10
-		mov SBUF, #02h				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont10:
+	cjne @R1, #0Ah, update_vfd_cont11
+		mov SBUF, #02h					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont11:
 
 	; "*" numeral
-	cjne @R1, #0Bh, cont11
-		mov SBUF, #01h				; send the third byte down the serial line
-		jnb TI, $ 					; wait for the entire byte to be sent
-		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
-	cont11:
+	cjne @R1, #0Bh, update_vfd_cont12
+		mov SBUF, #01h					; send the third byte down the serial line
+		jnb TI, $ 						; wait for the entire byte to be sent
+		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
+		sjmp update_vfd_cont12			; go to end of "case statement"
+	update_vfd_cont12:
 	
-	setb P3.5						; load the MAX6921
-	;lcall DELAY						; wait
-	clr P3.5						; latch the MAX6921
+	setb P3.5							; load the MAX6921
+	clr P3.5							; latch the MAX6921
 
-	; Now we prepare for the next cycle
+	; prepare for the next cycle
 	mov a, GRID_EN_1					; move GRID_EN_1 into accumulator
 	rlc a 								; rotate the accumlator left through carry (NOTE! the carry flag gets rotated into bit 0)
 	mov GRID_EN_1, a 					; move the rotated result back into GRID_EN_1
@@ -228,32 +222,25 @@ UPDATE_VFD:
 	rlc a 								; rotate the acculator left through carry (NOTE! the carry flag gest rotated into bit 0)
 	mov GRID_EN_2, a 					; move the rotated result back into GRID_EN_2
 	clr c 								; clear the carry flag
-	cjne R1, #29h, cont12 				; check if a complete grid cycle has finished (GRID_INDX == #29h)
+	cjne R1, #29h, update_vfd_cont13 	; check if a complete grid cycle has finished (GRID_INDX == #29h)
 		lcall VFD_RESET					; reset the VFD cycle
-	cont12:
+	update_vfd_cont13:
 
-	;pop a 					; restore value of a to value before UPDATE_VFD was called
-	;pop R1					; restore value of R1 to value before UPDATE_VFD was called
+	; pop the original SFR values back into their place and restore their values
+	pop acc
+	pop 1
 
-ret
+	ret
 
-DELAY:
-	;push R0 				; push R0 onto the stack to preserve its value
-	mov R0, #0FFh			; load R0 for 255 counts
-	loop0:
-	djnz R0, loop0
-	;pop	R0					; restore value of R0 to value before DELAY was called
-ret
+
 
 VFD_RESET:
 	; This function resets the VFD registers after a complete cycle
+	mov GRID_EN_1, #80h					; initialize grid enable byte 1
+	mov GRID_EN_2, #00h 				; initialize grid enable byte 2
+	mov GRID_INDX, #20h 				; initalize grid index (start with grid 9). This should reflect the memory location of GRID9.
 
-	; Initalize grid index (start with grid 9)
-	mov GRID_EN_1, #80h
-	mov GRID_EN_2, #00h
-	mov GRID_INDX, #20h 	; corresponds to memory location of GRID9
-
-ret
+	ret
 
 end
 
