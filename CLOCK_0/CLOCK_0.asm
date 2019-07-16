@@ -9,6 +9,24 @@ $MOD52
 .org 0
 ljmp INIT
 
+; External interrupt 0
+.org 0003h
+ENC_A_ISR:
+	lcall ENC_A
+	reti
+
+; Timer 0 interrupt
+.org 000Bh
+TIME_ISR:
+	lcall UPDATE_TIME 		; update the time
+	reti 					; exit
+	
+; External interrupt 1
+.org 0013h
+ENC_B_ISR:
+	lcall ENC_B
+	reti
+
 ; Timer 2 interrupt
 .org 002Bh
 DISPLAY_ISR:
@@ -20,6 +38,21 @@ DISPLAY_ISR:
 .org 100h
 INIT:
 	mov R5, #0Ch			; move 12 into R5 for displays update (nixie is displayed 1/12 as often as VFD and decatron)
+
+	; ====== State Variables ======
+	; State Variable:
+	.equ CLOCK_STATE, 7Fh
+
+	; State Space:
+	.equ SHOW_TIME_STATE, 7Eh
+	.equ SET_TIME_STATE,  7Dh
+
+	mov SHOW_TIME_STATE, #01h
+	mov SET_TIME_STATE,  #02h
+
+	; mov CLOCK_STATE, SHOW_TIME_STATE	; start in SHOW_TIME_STATE
+	mov CLOCK_STATE, SET_TIME_STATE		; start in SET_TIME_STATE (for testing SET_TIME function)
+	; =============================
 
 	; ====== VFD Variables ======
 	; bytes:
@@ -36,15 +69,15 @@ INIT:
 	.equ GRID2, 	3Ah
 	.equ GRID1, 	3Bh
 	; Fill in with values
-	mov GRID9, #0FFh
+	mov GRID9, #0Ah
 	mov GRID8, #00h
-	mov GRID7, #06h
+	mov GRID7, #01h
 	mov GRID6, #0Ah
-	mov GRID5, #00h
-	mov GRID4, #07h
+	mov GRID5, #03h
+	mov GRID4, #01h
 	mov GRID3, #0Ah
 	mov GRID2, #01h
-	mov GRID1, #08h
+	mov GRID1, #09h
 	; Initialize the VFD
 	lcall VFD_RESET
 	; ===========================
@@ -58,10 +91,10 @@ INIT:
 	.equ NIX2, 		40h
 	.equ NIX1,		41h
 	; Fill in with values
-	mov NIX4, #04h
-	mov NIX3, #03h
-	mov NIX2, #02h
-	mov NIX1, #01h
+	mov NIX4, #00h
+	mov NIX3, #00h
+	mov NIX2, #00h
+	mov NIX1, #00h
 	; Initialize the nixies
 	lcall NIX_RESET
 	; =============================
@@ -74,23 +107,104 @@ INIT:
 	; bits:
 	.equ DECA_FORWARDS?, 		20h.0
 	.equ DECA_RESET_CALLED?, 	20h.1
+
 	; Fill in with values
 	mov DECATRON, #2Dh
 	mov DECATRON_BUFFER, DECATRON
 	clr DECA_RESET_CALLED?
 	; ===============================
 
+	; ====== Rotary Encoder Variables ======
+	; A_FLAG: this bit is the A flag, to prevent one CW/CCW turn as registering as more than one turn
+	; B_FLAG: this bit is the B flag, to prevent on CCW/CW turn as registering as more than on turn
+	; BUTTON_FLAG: this bit is the button flag, to prevent going through states "too fast"
+	; bytes:
+	.equ UPPER_BOUND,		55h		; this register holds the max value of whichever value is currently getting set
+									; (e.g. decimal 12 for month)
+	.equ LOWER_BOUND, 		56h 	; this register holds the min value of whichever value is currently getting set
+									; (e.g. decimal 1 for month)
+
+	; bits:
+	.equ A_FLAG, 			21h.0
+	.equ B_FLAG, 			21h.1
+	.equ BUTTON_FLAG, 		21h.2
+
+	; Fill in with values
+	clr A_FLAG
+	clr B_FLAG
+	clr BUTTON_FLAG
+	; ======================================
+
+	; ====== Time Variables ======
+	.equ HOURS,   45h
+	.equ MINUTES, 46h
+	.equ SECONDS, 47h
+
+	.equ HR_TENS,  48h
+	.equ HR_ONES,  49h
+	.equ MIN_TENS, 4Ah
+	.equ MIN_ONES, 4Bh
+
+	mov HOURS, 		#00h
+	mov MINUTES, 	#00h
+	mov SECONDS, 	#05h
+	; ============================
+
+	; ====== Date Variables ======
+	.equ MONTH,		4Ch
+	.equ DAY, 		4Dh
+	.equ YEAR, 		4Eh
+
+	.equ MM_TENS, 	4Fh
+	.equ MM_ONES, 	50h
+
+	.equ DD_TENS, 	51h
+	.equ DD_ONES, 	52h
+
+	.equ YY_TENS, 	53h
+	.equ YY_ONES, 	54h
+
+	; Initialize date as 01-01-19
+	mov MONTH, 	#01h
+	mov DAY, 	#1Fh
+	mov YEAR, 	#13h
+	; ============================
+
 	; Clear the carry flag
 	clr c
 
+	; IE (interrupt enable) register
+	; _____________________________________________
+	; | EA | - | ET2 | ES | ET1 | EX1 | ET0 | EX0 |
+	; |____|___|_____|____|_____|_____|_____|_____|
+	; EA (IE.7): interrupt enable bit (must be set to use interrupts)
+	; IE.6: reserved
+	; ET2 (IE.5): timer 2 overflow interrupt enable bit (only 8052)
+	; ES (IE.4): serial port interrupt enable bit
+	; ET1 (IE.3): timer 1 overflow interrupt enable bit
+	; EX1 (IE.2): external interrupt 1 enable bit
+	; ET0 (IE.1): timer 0 overflow interrupt enable bit
+	; EX0 (IE.0): external interrupt 0 enable bit
+
 	; Interrupt initialization
 	setb EA 				; enable interrupts
+	setb ET0				; enable timer 0 overflow interrupt
+	clr EX0					; disable external interrupt 0 (gets enabled when rotary encoder is used)
+	setb IT0				; set external interrupt 0 to be triggered by falling edge
+	clr EX1					; disable external interrupt 1 (gets enabled when rotary encoder is used)
+	setb IT1				; set external interrupt 1 to be triggered by falling edge
 
-	; Timer 2 interrupt initialization
+	; Timer 2 interrupt initialization (for display interrupt)
 	setb ET2				; enable timer 2 interrupt
 	mov T2CON, #04h			; set timer 2 in auto reload
 	mov RCAP2H, #0FFh		; set high byte of timer 2 reload
-	mov RCAP2L, #00h		; set low byte of timer 2 reload 
+	mov RCAP2L, #00h		; set low byte of timer 2 reload
+
+	; Timer 0 interrupt initialization (for seconds interrupt)
+	mov TMOD, #06h 			; set timer0 as a counter for the seconds (00000110 bin = 06 hex)
+	mov TL0, #0C3h 			; initialize TL0 (#C3h for 60Hz, #CDh for 50Hz)
+	mov TH0, #0C3h 			; initialize TH0 (#C3h for 60Hz, #CDh for 50Hz) - reload value
+	setb TR0 				; start timer 0
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	mov SCON, #00h 		; initialize the serial port in mode 0
@@ -98,18 +212,295 @@ INIT:
 	sjmp MAIN
 
 MAIN:
+	mov a, CLOCK_STATE
+
+	cjne a, SHOW_TIME_STATE, main_cont0
+		ljmp SHOW_TIME
+	main_cont0:
+
+	cjne a, SET_TIME_STATE, main_cont1
+		ljmp SET_TIME
+	main_cont1:
+
 	sjmp MAIN
 
 
+SHOW_TIME:
+	; Split the month
+	mov a, MONTH
+	mov b, #0Ah
+	div ab
+	mov MM_TENS, a
+	mov MM_ONES, b
+
+	; Split the day
+	mov a, DAY
+	mov b, #0Ah
+	div ab
+	mov DD_TENS, a
+	mov DD_ONES, b
+
+	; Split the year
+	mov a, YEAR
+	mov b, #0Ah
+	div ab
+	mov YY_TENS, a
+	mov YY_ONES, b
+
+	; Split the hours
+	mov a, HOURS
+	mov b, #0Ah
+	div ab
+	mov HR_TENS, a
+	mov HR_ONES, b
+
+	; Split the minutes
+	mov a, MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	; Display the numbers
+	mov GRID9, #0FFh
+	mov GRID8, MM_TENS
+	mov GRID7, MM_ONES
+	; mov GRID6, #0Ah --> set in INIT
+	mov GRID5, DD_TENS
+	mov GRID4, DD_ONES
+	; mov GRID3, #0Ah --> set in INIT
+	mov GRID2, YY_TENS
+	mov GRID1, YY_ONES
+
+	mov NIX4, HR_TENS
+	mov NIX3, HR_ONES
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	mov DECATRON, SECONDS
+
+ljmp MAIN
+
+
+
+
+SET_TIME:
+	; Disable 60/50Hz timing interrupt
+	clr ET0										; disable timer 0 overflow interrupt
+	clr TR0 									; stop timer0
+
+	; Enable external interrupts for rotary encoder
+	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
+	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
+	setb EX0						; enable external interrupt 0
+	setb EX1						; enable external interrupt 1
+
+	; Set the month
+	SET_MM:
+		mov UPPER_BOUND, #0Ch 					; months can be 12 max
+		mov LOWER_BOUND, #01h 					; months can be 1 min
+
+		mov R0, #4Ch							; corresponds to memory address of MONTH
+
+		set_mm_loop1:
+
+		jb P1.2, set_mm_cont2					; check if rotary encoder is still pressed
+			clr BUTTON_FLAG						; if not, clear the encoder button flag
+		set_mm_cont2:
+
+		jb BUTTON_FLAG, set_mm_cont3			; check to make sure BUTTON_FLAG is cleared
+			jnb P1.2, set_mm_cont3				; check if rotary encoder button is pressed
+				mov R2, #28h					; load R2 for 40 counts
+				mov R3, #0FFh					; load R3 for 255 counts
+				set_mm_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
+												; changed (also acts as debounce)
+					jnb P1.2, set_mm_cont3		; check if rotary encoder button is still pressed
+					djnz R3, set_mm_loop0		; decrement count in R3
+				mov R3, #0FFh					; reload R3 in case loop is needed again
+				djnz R2, set_mm_loop0			; count R3 down again until R2 counts down
+				setb BUTTON_FLAG				; set the BUTTON_FLAG
+				mov GRID9, #0Bh
+				ljmp SET_DD						; jump to SET_DD
+		set_mm_cont3:
+
+		; Operations to dispay MONTH register in decimal format: MM
+		mov a, MONTH
+		mov b, #0Ah
+		div ab
+		mov MM_TENS, a
+		mov MM_ONES, b
+
+		; Display MM:
+		mov GRID8, MM_TENS
+		mov GRID7, MM_ONES
+
+		sjmp set_mm_loop1
+		
+	; Set the day
+	SET_DD:
+		; Set the upper and lower bounds
+		mov R2, MONTH
+		mov LOWER_BOUND, #01h 					; days can be 1 min
+
+		January:
+		cjne R2, #01h, February
+			mov UPPER_BOUND, #1Fh 				; days can be 31 max
+			ljmp set_dd_cont0 					; no need to check the day, continue
+
+		February:
+		cjne R2, #02h, March
+			mov UPPER_BOUND, #1Dh 				; days can be 29 max
+			ljmp set_dd_cont1 					; jump to check that the day is legal
+
+		March:
+		cjne R2, #03h, April
+			mov UPPER_BOUND, #1Fh 				; days can be 31 max
+			ljmp set_dd_cont0 					; no need to check the day, continue
+
+		April:
+		cjne R2, #04h, May
+			mov UPPER_BOUND, #1Eh 				; days can be 30 max
+			ljmp set_dd_cont1 					; jump to check that the day is legal
+
+		May:
+		cjne R2, #05h, June
+			mov UPPER_BOUND, #1Fh 				; days can be 31 max
+			ljmp set_dd_cont0 					; no need to check the day, continue
+
+		June:
+		cjne R2, #06h, July
+			mov UPPER_BOUND, #1Eh 				; days can be 30 max
+			ljmp set_dd_cont1 					; jump to check that the day is legal
+
+		July:
+		cjne R2, #07h, August
+			mov UPPER_BOUND, #1Fh 				; days can be 31 max
+			ljmp set_dd_cont0 					; no need to check the day, continue
+
+		August:
+		cjne R2, #08h, September
+			mov UPPER_BOUND, #1Fh 				; days can be 31 max
+			ljmp set_dd_cont0 					; no need to check the day, continue
+
+		September:
+		cjne R2, #09h, October
+			mov UPPER_BOUND, #1Eh 				; days can be 30 max
+			ljmp set_dd_cont1 					; jump to check that the day is legal
+
+		October:
+		cjne R2, #0Ah, November
+			mov UPPER_BOUND, #1Fh 				; days can be 31 max
+			ljmp set_dd_cont0 					; no need to check the day, continue
+
+		November:
+		cjne R2, #0Bh, December
+			mov UPPER_BOUND, #1Eh 				; days can be 30 max
+			ljmp set_dd_cont1 					; jump to check that the day is legal
+
+		December:
+		mov UPPER_BOUND, #1Fh 					; days can be 31 max
+		ljmp set_dd_cont0 						; no need to check the day, continue
+
+		set_dd_cont1:
+		; check if DAY is greater than UPPER_BOUND
+		mov a, UPPER_BOUND 						; move UPPER_BOUND into accumulator
+		clr c 									; clear the accumulator
+		subb a, DAY 							; subtract a - DAY
+		jnc set_dd_cont0 						; jump to end if carry is not set
+			; if DAY is greater than UPPER_BOUND:
+			mov DAY, UPPER_BOUND 				; set the day to the max value
+
+		set_dd_cont0:
+
+		mov R0, #4Dh							; corresponds to memory address of DAY
+
+		set_dd_loop1:
+
+		jb P1.2, set_dd_cont2					; check if rotary encoder is still pressed
+			clr BUTTON_FLAG						; if not, clear the encoder button flag
+		set_dd_cont2:
+
+		jb BUTTON_FLAG, set_dd_cont3			; check to make sure BUTTON_FLAG is cleared
+			jnb P1.2, set_dd_cont3				; check if rotary encoder button is pressed
+				mov R2, #28h					; load R2 for 40 counts
+				mov R3, #0FFh					; load R3 for 255 counts
+				set_dd_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
+												; changed (also acts as debounce)
+					jnb P1.2, set_dd_cont3		; check if rotary encoder button is still pressed
+					djnz R3, set_dd_loop0		; decrement count in R3
+				mov R3, #0FFh					; reload R3 in case loop is needed again
+				djnz R2, set_dd_loop0			; count R3 down again until R2 counts down
+				setb BUTTON_FLAG				; set the BUTTON_FLAG
+				mov GRID9, #0FFh
+				ljmp SET_YY						; jump to SET_YY
+		set_dd_cont3:
+
+		; Operations to dispay DAY register in decimal format: DD
+		mov a, DAY
+		mov b, #0Ah
+		div ab
+		mov DD_TENS, a
+		mov DD_ONES, b
+
+		; Display DD:
+		mov GRID5, DD_TENS
+		mov GRID4, DD_ONES
+
+		ljmp set_dd_loop1
+
+
+
+	; Set the year
+	SET_YY:
+
+
+	; Set the hours
+	SET_HR:
+
+
+	; Set the minutes
+	SET_MIN:
+
+	; Set the seconds (defaults for zeroing the seconds)
+	SET_SECONDS:
+		mov SECONDS, #01h 		; FIX: should be set to 0 instead of 1
+
+	; Restart timer 0
+	setb ET0									; enable timer 0 overflow interrupt
+	mov TL0, #0C3h 								; initialize TL0 (#C3h for 60Hz, #CDh for 50Hz)
+	setb TR0 									; start timer0
+
+
+ljmp MAIN
+
+
+
+UPDATE_TIME:
+	inc SECONDS 			; increment the seconds
+	mov R6, SECONDS
+	cjne R6, #3Ch, update_time_cont0
+		mov SECONDS, #01h
+		inc MINUTES
+		mov R6, MINUTES
+		cjne R6, #3Ch, update_time_cont0
+			mov MINUTES, #00h
+			inc HOURS
+			mov R6, HOURS
+			cjne R6, #18h, update_time_cont0  ; if hours is 24 decimal, new day
+				mov HOURS, #00h
+	update_time_cont0:
+ret 			 			; exit
+
 
 UPDATE_DISPLAYS:
+	lcall UPDATE_DECA					; update the decatron
+	lcall UPDATE_VFD					; update the VFD
+
+	; ISSUE?
 	djnz R5, update_displays_cont0		; decrement the display update count, if it is zero, update the nixies
 		lcall UPDATE_NIX				; update the nixies
 		mov R5, #0Ch					; reset R5 with a value of 12
 	update_displays_cont0:
-	lcall UPDATE_VFD					; update the VFD
-	lcall UPDATE_DECA					; update the decatron
-	
 ret
 
 
@@ -141,7 +532,6 @@ UPDATE_NIX:
 	mov a, NIX_EN 				; move NIX_EN into accumulator
 	orl a, @R1 					; bitwise or the accumulator (NIX_EN) with @R1 (@NIX_INDX)
 	mov P2, #00h 				; clear all nixies
-	lcall DELAY 				; wait
 	mov P2, a 					; light up the appropriate nixie
 
 	; prepare for the next cycle
@@ -157,18 +547,6 @@ UPDATE_NIX:
 	pop acc
 	pop 1
 
-ret
-
-
-DELAY:
-	push 0 						; push R0 onto the stack to preserve its value
-	
-	mov R0, #0FFh				; load R0 for 255 counts
-	delay_loop1:
-	djnz R0, delay_loop1
-	
-	pop	0						; restore value of R0 to value before DELAY was called
-	
 ret
 
 
@@ -303,7 +681,6 @@ UPDATE_VFD:
 	vfd_cont12:
 	
 	setb P3.5						; load the MAX6921
-	;lcall DELAY					; wait
 	clr P3.5						; latch the MAX6921
 
 	; Now we prepare for the next cycle
@@ -469,7 +846,8 @@ DECA_TOGGLE:
 	; see if DECATRON is greater than or less than (or equal to) 30
 	clr c 										; clear the carry bit
 	mov a, #1Eh									; move 30 into the accumulator
-	subb a, DECATRON							; perform 30-DECATRON.  if DECATRON is greater than 30, the carry flag (c) will be set
+	subb a, DECATRON							; perform 30-DECATRON.  if DECATRON is greater than 30, the carry flag (c) will
+												; be set
 
 	jb DECA_FORWARDS?, deca_toggle_cont2
 		; if going from forwards to backwards
@@ -519,15 +897,71 @@ DECA_TOGGLE:
 ret 	 										; exit
 
 
+ENC_A:
+	; push any used SFRs onto the stack to preserve their values
+	push acc
+
+	clr c 										; clear the carry bit
+
+	jb A_FLAG, enc_a_cont0 						; check if A_FLAG is set
+		; if A_FLAG is not set:
+		setb B_FLAG 							; set B_FLAG
+		sjmp enc_a_cont1 						; jump to exit
+	enc_a_cont0:
+	; if A_FLAG is set:
+	clr A_FLAG 									; clear A_FLAG
+	inc @R0 									; increment the register R0 is pointing to
+
+	; check if @R0 is greater than UPPER_BOUND
+	mov a, UPPER_BOUND 							; move UPPER_BOUND into accumulator
+	subb a, @R0 								; subtract a - @R0
+	jnc enc_a_cont1 							; jump to end if carry is not set
+		; if @R0 is greater than UPPER_BOUND:
+		mov @R0, LOWER_BOUND 					; rollover @R0
+	enc_a_cont1:
+
+	; pop the original SFR values back into their place and restore their values
+	pop acc
+ret 											; exit
+
+ENC_B:
+	; push any used SFRs onto the stack to preserve their values
+	push acc
+
+	clr c 										; clear the carry bit
+
+	jb B_FLAG, enc_b_cont0 						; check if B_FLAG is set
+		; if B_FLAG is not set:
+		setb A_FLAG 							; set A_FLAG
+		sjmp enc_b_cont1 						; jump to exit
+	enc_b_cont0:
+	; if B_FLAG is set:
+	clr B_FLAG 									; clear B_FLAG
+	dec @R0
+
+	; check if @R0 is less than LOWER_BOUND
+	mov a, @R0 									; move @R0 into accumulator
+	subb a, LOWER_BOUND 						; subtract a - LOWER_BOUND
+	jnc enc_b_cont1 							; jump to end if carry is not set
+		; if @R0 is less than LOWER_BOUND:
+		mov @R0, UPPER_BOUND 					; rollover @R0
+	enc_b_cont1:
+
+	; pop the original SFR values back into their place and restore their values
+	pop acc
+ret 											; exit
+
+
+
 LONG_DELAY:
-	mov R0, #0FFh								; load R0 for 255 counts
+	mov R7, #0FFh								; load R7 for 255 counts
 	mov R1, #0FFh								; load R1 for 255 counts		
 
 	loop2:
 		djnz R1, loop2							; decrement count in R1
 	mov R1, #0FFh								; reload R1 in case loop is needed again
 	
-	djnz R0, loop2								; count R1 down again until R0 counts down
+	djnz R7, loop2								; count R1 down again until R7 counts down
 ret
 
 

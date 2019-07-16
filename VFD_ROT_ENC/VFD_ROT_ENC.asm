@@ -214,7 +214,7 @@ MAIN:									; default/main state of the program
 		djnz R2, loop3					; count R3 down again until R2 counts down
 		setb ENC.2						; set the rotary encoder button flag
 		mov GRID9, #00Bh
-		clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 0
+		clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
 		clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
 		setb EX0						; enable external interrupt 0
 		setb EX1						; enable external interrupt 1
@@ -232,7 +232,7 @@ SET_DATE:										; set date state
 	mov R0, #30h								; corresponds to memory address of MONTH
 
 	; Set the month
-	SET_MM:								
+	SET_MM:
 
 		; Initalize the enconder registers
 		; mov ENC_TENS, MM_TENS
@@ -452,17 +452,6 @@ VFD_RESET:
 ret
 
 ENC_A:
-	;clr IE0
-	;inc @R0
-
-	; THIS RUNS AS A SINLE INTERRUPT (FOR DEC AND INC OF @R0)
-	; jb P3.3, enc_a_cont0
-	; 	inc @R0
-	; 	sjmp enc_a_cont1
-	; enc_a_cont0:
-	; 	dec @R0
-	; enc_a_cont1:
-
 	jb ENC.0, enc_a_cont0
 		setb ENC.1
 		sjmp enc_a_cont1
