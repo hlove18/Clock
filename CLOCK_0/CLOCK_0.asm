@@ -128,11 +128,13 @@ INIT:
 	.equ A_FLAG, 			21h.0
 	.equ B_FLAG, 			21h.1
 	.equ BUTTON_FLAG, 		21h.2
+	.equ INC_LEAP_YEAR?,	21h.3	
 
 	; Fill in with values
 	clr A_FLAG
 	clr B_FLAG
 	clr BUTTON_FLAG
+	clr INC_LEAP_YEAR?
 	; ======================================
 
 	; ====== Time Variables ======
@@ -452,10 +454,72 @@ SET_TIME:
 
 	; Set the year
 	SET_YY:
+		; Set the upper and lower bounds
+		mov LOWER_BOUND, #00h 					; years can be 00 min
+		mov UPPER_BOUND, #63h					; years can be 99 max
+
+		; check for leap day condition
+		mov R2, MONTH
+
+		cjne R2, #02h, set_yy_cont0				; if the month is february
+			mov R2, DAY 						; move DAY into R2
+			cjne R2, #1Dh, set_yy_cont0			; and if the day is the 29th 
+				setb INC_LEAP_YEAR?				; set the INC_LEAP_YEAR? flag
+				; adjust the year if it's not a multiple of 4
+				mov a, YEAR 					; move the YEAR into the accumulator
+				mov b, #04h						; move 4 into b
+				div ab							; divide: a/b with the quotient in a and remainder in b
+				mov a, b 						; move b into accumulator
+				; decrement the YEAR until it is a multiple of 4
+				set_yy_loop2:
+				jz set_yy_cont0					; jump to set_yy_cont0 if the accumulator is zero (valid leap year)
+					dec YEAR 					; decrement the YEAR
+					dec a 						; decrement the accumulator
+					sjmp set_yy_loop2 			; loop
+
+		set_yy_cont0:
+
+		mov R0, #4Eh							; corresponds to memory address of YEAR
+
+		set_yy_loop1:
+
+		jb P1.2, set_yy_cont2					; check if rotary encoder is still pressed
+			clr BUTTON_FLAG						; if not, clear the encoder button flag
+		set_yy_cont2:
+
+		jb BUTTON_FLAG, set_yy_cont3			; check to make sure BUTTON_FLAG is cleared
+			jnb P1.2, set_yy_cont3				; check if rotary encoder button is pressed
+				mov R2, #28h					; load R2 for 40 counts
+				mov R3, #0FFh					; load R3 for 255 counts
+				set_yy_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
+												; changed (also acts as debounce)
+					jnb P1.2, set_yy_cont3		; check if rotary encoder button is still pressed
+					djnz R3, set_yy_loop0		; decrement count in R3
+				mov R3, #0FFh					; reload R3 in case loop is needed again
+				djnz R2, set_yy_loop0			; count R3 down again until R2 counts down
+				setb BUTTON_FLAG				; set the BUTTON_FLAG
+				mov GRID9, #0FFh
+				ljmp SET_HR						; jump to SET_HR
+		set_yy_cont3:
+
+		; Operations to dispay YEAR register in decimal format: YY
+		mov a, YEAR
+		mov b, #0Ah
+		div ab
+		mov YY_TENS, a
+		mov YY_ONES, b
+
+		; Display YY:
+		mov GRID2, YY_TENS
+		mov GRID1, YY_ONES
+
+		ljmp set_yy_loop1
 
 
 	; Set the hours
 	SET_HR:
+		; clear the leap year bit
+		clr INC_LEAP_YEAR?
 
 
 	; Set the minutes
@@ -911,6 +975,12 @@ ENC_A:
 	; if A_FLAG is set:
 	clr A_FLAG 									; clear A_FLAG
 	inc @R0 									; increment the register R0 is pointing to
+	jnb INC_LEAP_YEAR?, enc_a_cont2				; check if INC_LEAP_YEAR? bit is set
+		;if INC_LEAP_YEAR? bit is set, increment @R0 (YEAR) three more times (for a total of 4 times) 
+		inc @R0
+		inc @R0
+		inc @R0
+	enc_a_cont2:
 
 	; check if @R0 is greater than UPPER_BOUND
 	mov a, UPPER_BOUND 							; move UPPER_BOUND into accumulator
@@ -938,6 +1008,12 @@ ENC_B:
 	; if B_FLAG is set:
 	clr B_FLAG 									; clear B_FLAG
 	dec @R0
+	jnb INC_LEAP_YEAR?, enc_b_cont2				; check if INC_LEAP_YEAR? bit is set
+		;if INC_LEAP_YEAR? bit is set, decrement @R0 (YEAR) three more times (for a total of 4 times) 
+		dec @R0
+		dec @R0
+		dec @R0
+	enc_b_cont2:
 
 	; check if @R0 is less than LOWER_BOUND
 	mov a, @R0 									; move @R0 into accumulator
