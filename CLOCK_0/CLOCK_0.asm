@@ -50,8 +50,8 @@ INIT:
 	mov SHOW_TIME_STATE, #01h
 	mov SET_TIME_STATE,  #02h
 
-	; mov CLOCK_STATE, SHOW_TIME_STATE	; start in SHOW_TIME_STATE
-	mov CLOCK_STATE, SET_TIME_STATE		; start in SET_TIME_STATE (for testing SET_TIME function)
+	mov CLOCK_STATE, SHOW_TIME_STATE	; start in SHOW_TIME_STATE
+	; mov CLOCK_STATE, SET_TIME_STATE		; start in SET_TIME_STATE (for testing SET_TIME function)
 	; =============================
 
 	; ====== VFD Variables ======
@@ -205,7 +205,7 @@ INIT:
 	; Timer 0 interrupt initialization (for seconds interrupt)
 	mov TMOD, #06h 			; set timer0 as a counter for the seconds (00000110 bin = 06 hex)
 	mov TL0, #0C3h 			; initialize TL0 (#C3h for 60Hz, #CDh for 50Hz)
-	mov TH0, #0C3h 			; initialize TH0 (#C3h for 60Hz, #CDh for 50Hz) - reload value
+	mov TH0, #0C3h 			; initialize TH0 (#C3h for 60Hz, #CDh for 50Hz) - reload value			
 	setb TR0 				; start timer 0
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
@@ -281,6 +281,23 @@ SHOW_TIME:
 
 	mov DECATRON, SECONDS
 
+	jnb P1.2, cont14					; check if rotary encoder button is pressed
+		mov R2, #0FFh					; load R2 for 255 counts
+		mov R3, #0FFh					; load R3 for 255 counts
+		loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed (also acts as debounce)
+			jnb P1.2, cont14			; check if rotary encoder button is still pressed
+			djnz R3, loop3				; decrement count in R3
+		mov R3, #0FFh					; reload R3 in case loop is needed again
+		djnz R2, loop3					; count R3 down again until R2 counts down
+		setb BUTTON_FLAG				; set the rotary encoder button flag
+		mov GRID9, #00Bh
+		clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
+		clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
+		setb EX0						; enable external interrupt 0
+		setb EX1						; enable external interrupt 1
+		mov CLOCK_STATE, SET_TIME_STATE	; change state to SET_TIME_STATE
+	cont14:
+
 ljmp MAIN
 
 
@@ -299,6 +316,7 @@ SET_TIME:
 
 	; Set the month
 	SET_MM:
+		; Set the upper and lower bounds
 		mov UPPER_BOUND, #0Ch 					; months can be 12 max
 		mov LOWER_BOUND, #01h 					; months can be 1 min
 
@@ -332,7 +350,7 @@ SET_TIME:
 		mov MM_TENS, a
 		mov MM_ONES, b
 
-		; Display MM:
+		; Display MONTH:
 		mov GRID8, MM_TENS
 		mov GRID7, MM_ONES
 
@@ -444,7 +462,7 @@ SET_TIME:
 		mov DD_TENS, a
 		mov DD_ONES, b
 
-		; Display DD:
+		; Display DAY:
 		mov GRID5, DD_TENS
 		mov GRID4, DD_ONES
 
@@ -465,6 +483,7 @@ SET_TIME:
 			mov R2, DAY 						; move DAY into R2
 			cjne R2, #1Dh, set_yy_cont0			; and if the day is the 29th 
 				setb INC_LEAP_YEAR?				; set the INC_LEAP_YEAR? flag
+				mov UPPER_BOUND, #60h 			; move 96 into UPPER_BOUND for leap day condition (don't want rollover to be 99)
 				; adjust the year if it's not a multiple of 4
 				mov a, YEAR 					; move the YEAR into the accumulator
 				mov b, #04h						; move 4 into b
@@ -509,7 +528,7 @@ SET_TIME:
 		mov YY_TENS, a
 		mov YY_ONES, b
 
-		; Display YY:
+		; Display YEAR:
 		mov GRID2, YY_TENS
 		mov GRID1, YY_ONES
 
@@ -521,11 +540,91 @@ SET_TIME:
 		; clear the leap year bit
 		clr INC_LEAP_YEAR?
 
+		; Set the upper and lower bounds
+		mov UPPER_BOUND, #17h 					; hours can be 23 max
+		mov LOWER_BOUND, #00h 					; hours can be 0 min
+
+		mov R0, #45h							; corresponds to memory address of HOURS
+
+		set_hr_loop1:
+
+		jb P1.2, set_hr_cont2					; check if rotary encoder is still pressed
+			clr BUTTON_FLAG						; if not, clear the encoder button flag
+		set_hr_cont2:
+
+		jb BUTTON_FLAG, set_hr_cont3			; check to make sure BUTTON_FLAG is cleared
+			jnb P1.2, set_hr_cont3				; check if rotary encoder button is pressed
+				mov R2, #28h					; load R2 for 40 counts
+				mov R3, #0FFh					; load R3 for 255 counts
+				set_hr_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
+												; changed (also acts as debounce)
+					jnb P1.2, set_hr_cont3		; check if rotary encoder button is still pressed
+					djnz R3, set_hr_loop0		; decrement count in R3
+				mov R3, #0FFh					; reload R3 in case loop is needed again
+				djnz R2, set_hr_loop0			; count R3 down again until R2 counts down
+				setb BUTTON_FLAG				; set the BUTTON_FLAG
+				mov GRID9, #0Bh
+				ljmp SET_MIN					; jump to SET_MIN
+		set_hr_cont3:
+
+		; Operations to dispay HOURS register in decimal format: HR
+		mov a, HOURS
+		mov b, #0Ah
+		div ab
+		mov HR_TENS, a
+		mov HR_ONES, b
+
+		; Display HOURS:
+		mov NIX4, HR_TENS
+		mov NIX3, HR_ONES
+
+		sjmp set_hr_loop1
+
 
 	; Set the minutes
 	SET_MIN:
+		; Set the upper and lower bounds
+		mov UPPER_BOUND, #3Bh 					; minutes can be 59 max
+		mov LOWER_BOUND, #00h 					; minutes can be 0 min
 
-	; Set the seconds (defaults for zeroing the seconds)
+		mov R0, #46h							; corresponds to memory address of MINUTES
+
+		set_min_loop1:
+
+		jb P1.2, set_min_cont2					; check if rotary encoder is still pressed
+			clr BUTTON_FLAG						; if not, clear the encoder button flag
+		set_min_cont2:
+
+		jb BUTTON_FLAG, set_min_cont3			; check to make sure BUTTON_FLAG is cleared
+			jnb P1.2, set_min_cont3				; check if rotary encoder button is pressed
+				mov R2, #28h					; load R2 for 40 counts
+				mov R3, #0FFh					; load R3 for 255 counts
+				set_min_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
+												; changed (also acts as debounce)
+					jnb P1.2, set_min_cont3		; check if rotary encoder button is still pressed
+					djnz R3, set_min_loop0		; decrement count in R3
+				mov R3, #0FFh					; reload R3 in case loop is needed again
+				djnz R2, set_min_loop0			; count R3 down again until R2 counts down
+				setb BUTTON_FLAG				; set the BUTTON_FLAG
+				mov GRID9, #0Bh
+				ljmp SET_SECONDS				; jump to SET_SECONDS
+		set_min_cont3:
+
+		; Operations to dispay MINUTES register in decimal format: MIN
+		mov a, MINUTES
+		mov b, #0Ah
+		div ab
+		mov MIN_TENS, a
+		mov MIN_ONES, b
+
+		; Display MINUTES:
+		mov NIX2, MIN_TENS
+		mov NIX1, MIN_ONES
+
+		sjmp set_min_loop1
+
+
+	; Set the seconds (defaults to zeroing the seconds)
 	SET_SECONDS:
 		mov SECONDS, #01h 		; FIX: should be set to 0 instead of 1
 
@@ -534,6 +633,8 @@ SET_TIME:
 	mov TL0, #0C3h 								; initialize TL0 (#C3h for 60Hz, #CDh for 50Hz)
 	setb TR0 									; start timer0
 
+	; Change the clock state
+	mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
 
 ljmp MAIN
 
@@ -814,7 +915,7 @@ UPDATE_DECA:
 			sjmp update_deca_cont6 				; exit
 		update_deca_cont3:
 		; if swiping clockwise
-		setb P0.1 								; pull G1 high (note inverter between 8051 pin and decatron)
+		setb P0.1 								; pull G1 low (note inverter between 8051 pin and decatron)
 		inc DECA_STATE 							; DECA_STATE:  0 --> 1
 		sjmp update_deca_cont6 					; exit
 	update_deca_cont2:
@@ -827,7 +928,7 @@ UPDATE_DECA:
 			sjmp update_deca_cont6 				; exit
 		update_deca_cont5:
 		; if swiping clockwise
-		setb P0.2 								; pull G2 high (note inverter between 8051 pin and decatron)
+		setb P0.2 								; pull G2 low (note inverter between 8051 pin and decatron)
 		clr P0.1 								; pull G1 high (note inverter between 8051 pin and decatron)
 		inc DECA_STATE 							; DECA_STATE:  1 --> 2
 		sjmp update_deca_cont6 					; exit
@@ -975,6 +1076,7 @@ ENC_A:
 	; if A_FLAG is set:
 	clr A_FLAG 									; clear A_FLAG
 	inc @R0 									; increment the register R0 is pointing to
+
 	jnb INC_LEAP_YEAR?, enc_a_cont2				; check if INC_LEAP_YEAR? bit is set
 		;if INC_LEAP_YEAR? bit is set, increment @R0 (YEAR) three more times (for a total of 4 times) 
 		inc @R0
@@ -1007,7 +1109,8 @@ ENC_B:
 	enc_b_cont0:
 	; if B_FLAG is set:
 	clr B_FLAG 									; clear B_FLAG
-	dec @R0
+	dec @R0										; decrement the register R0 is pointing to
+
 	jnb INC_LEAP_YEAR?, enc_b_cont2				; check if INC_LEAP_YEAR? bit is set
 		;if INC_LEAP_YEAR? bit is set, decrement @R0 (YEAR) three more times (for a total of 4 times) 
 		dec @R0
@@ -1022,6 +1125,15 @@ ENC_B:
 		; if @R0 is less than LOWER_BOUND:
 		mov @R0, UPPER_BOUND 					; rollover @R0
 	enc_b_cont1:
+
+	; !! EDGE CASE: if the lower bound is zero, dec @R0 will rollover to 255, which still looks larger than LOWER_BOUND.
+	; check if @R0 is greater than UPPER_BOUND
+	mov a, UPPER_BOUND 							; move UPPER_BOUND into accumulator
+	subb a, @R0 								; subtract a - @R0
+	jnc enc_b_cont3 							; jump to end if carry is not set
+		; if @R0 is greater than UPPER_BOUND:
+		mov @R0, UPPER_BOUND 					; rollover @R0
+	enc_b_cont3:
 
 	; pop the original SFR values back into their place and restore their values
 	pop acc

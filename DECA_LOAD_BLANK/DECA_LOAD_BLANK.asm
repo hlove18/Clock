@@ -52,7 +52,7 @@ INIT:
 	.equ DECATRON, 22h
 	.equ DECATRON_BUFFER, 23h
 
-	mov DECATRON, #03h
+	mov DECATRON, #05h
 	mov DECATRON_BUFFER, DECATRON
 	
 	; MOVED TO INSIDE UPDATE_DECA function because popping R4 caused issue
@@ -84,7 +84,7 @@ MAIN:
 	inc DECATRON
 	mov R7, DECATRON
 	cjne R7, #3Ch, cont19
-		mov DECATRON, #01h
+		mov DECATRON, #00h
 	cont19:
 	sjmp MAIN
 
@@ -128,6 +128,8 @@ UPDATE_DECA:
 		update_deca_cont3:
 		; if swiping clockwise
 		setb P0.1 								; pull G1 low (note inverter between 8051 pin and decatron)
+		clr P0.3 								; pull Kx high (note inverter between 8051 pin and decatron)
+		clr P0.0 								; pull K0 high (note inverter between 8051 pin and decatron)
 		inc DECA_STATE 							; DECA_STATE:  0 --> 1
 		sjmp update_deca_cont6 					; exit
 	update_deca_cont2:
@@ -136,6 +138,8 @@ UPDATE_DECA:
 		jb DECA_FORWARDS?, update_deca_cont5 	; check direction of swiping
 			; if swiping counter-clockwise
 			setb P0.2 							; pull G2 low (note inverter between 8051 pin and decatron)
+			clr P0.3 							; pull Kx high (note inverter between 8051 pin and decatron)
+			clr P0.0 							; pull K0 high (note inverter between 8051 pin and decatron)
 			dec DECA_STATE 						; DECA_STATE:  1 --> 0
 			sjmp update_deca_cont6 				; exit
 		update_deca_cont5:
@@ -149,11 +153,15 @@ UPDATE_DECA:
 	cjne R3, #02h, update_deca_cont6 			; if we are in DECA_STATE 1, jump the arc to Kx
 		jb DECA_FORWARDS?, update_deca_cont7 	; check direction of swiping
 			; if swiping counter-clockwise
+			setb P0.3 							; pull Kx low (note inverter between 8051 pin and decatron)
+			setb P0.0 							; pull K0 low (note inverter between 8051 pin and decatron)
 			clr P0.1 							; pull G1 high (note inverter between 8051 pin and decatron)
 			dec DECA_STATE 						; DECA_STATE:  2 --> 1
 			sjmp update_deca_cont6 				; exit
 		update_deca_cont7:
 		; if swiping clockwise
+		setb P0.3 								; pull Kx low (note inverter between 8051 pin and decatron)
+		setb P0.0 								; pull K0 low (note inverter between 8051 pin and decatron)
 		clr P0.2 								; pull G2 high (note inverter between 8051 pin and decatron)
 		mov DECA_STATE, #00h 					; DECA_STATE:  2 --> 0
 		sjmp update_deca_cont6 					; exit
@@ -166,33 +174,20 @@ UPDATE_DECA:
 	
 	ret
 
-
-
 DECA_RESET:
 	mov DECA_STATE, #00h   	; initialize the decatron
 
 	mov R4, DECATRON     	; initialize R4
-	
-	setb P0.0				; reset decatron
-	lcall LONG_DELAY
-	clr P0.0
-	lcall LONG_DELAY
 
-	setb P0.0				; reset decatron
-	lcall LONG_DELAY
-	clr P0.0
-	lcall LONG_DELAY
+	setb P0.0 				; turn on K0
+	clr P0.1				; turn off G1
+	clr P0.2 				; turn off G2
+	clr P0.3 				; turn on Kx
 
-	setb P0.0				; reset decatron
-	lcall LONG_DELAY
-	clr P0.0
-	lcall LONG_DELAY
-
-	clr P0.1
-	clr P0.2
+	setb P0.4				; turn on the decatron
 
 	setb DECA_FORWARDS? 	; set the direction of the decatron
-	ret
+ret
 
 
 DECA_TOGGLE:
@@ -214,8 +209,19 @@ DECA_TOGGLE:
 	cpl DECA_FORWARDS? 							; toggle the swiping direction
 
 	mov a, DECATRON   							; move DECATRON into the accumulator
+	cjne a, #00h, deca_toggle_cont8				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end, otherwise, continue
+		clr P0.4								; turn off the decatron
+		clr P0.0								; turn off K0
+		clr P0.1								; turn off G1
+		clr P0.2								; turn off G2
+		clr P0.3								; turn off Kx
+		sjmp deca_toggle_cont1 					; exit (NOTE: "ret" DOES NOT work for some reason...)
+	deca_toggle_cont8:
+
+	mov a, DECATRON   							; move DECATRON into the accumulator
 	cjne a, #01h, deca_toggle_cont0				; if DECATRON = 1, then no need to toggle, skip to the end, otherwise, continue
-		mov R4, DECATRON 						; reload R4
+		;mov R4, DECATRON 						; reload R4
+		lcall DECA_RESET 						; reset the decatron (light up K0)
 		sjmp deca_toggle_cont1 					; exit (NOTE: "ret" DOES NOT work for some reason...)
 	deca_toggle_cont0:
 
@@ -269,7 +275,7 @@ DECA_TOGGLE:
 
 	deca_toggle_cont1:
 
-	ret 										; exit
+ret 											; exit
 
 
 

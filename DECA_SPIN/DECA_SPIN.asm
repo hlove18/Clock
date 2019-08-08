@@ -12,30 +12,55 @@ ljmp INIT
 
 INIT:
 
-	mov P0, #00h
+	setb P0.0
+	clr P0.3
+	clr P0.1
+	clr P0.2
 	lcall LONG_DELAY
+	lcall LONG_DELAY
+	clr P0.0
 
-	mov R2, #04h
+	;mov P0, #00h
+	;lcall LONG_DELAY
+
+	mov R2, #05h
 
 	sjmp MAIN
 
 MAIN:
 	
-	;loop3:
+	loop3:
 		setb P0.1
-		lcall MED_DELAY
-		
+		clr P0.3
+		;clr P0.0
+		lcall LONG_DELAY
+		lcall LONG_DELAY
+
 		setb P0.2
-		lcall MED_DELAY
-		
 		clr P0.1
-		lcall MED_DELAY
+		lcall LONG_DELAY
+		lcall LONG_DELAY
 
+		
+		setb P0.3
 		clr P0.2
-		lcall MED_DELAY
-	;djnz R2, loop3
+		;setb P0.0
+		
+		lcall LONG_DELAY
+		lcall LONG_DELAY
 
-	;mov R2, #04h
+	djnz R2, loop3
+
+	mov R2, #05h
+
+	clr P0.0
+	clr P0.3
+	clr P0.1
+	clr P0.2
+	lcall LONG_DELAY
+	lcall LONG_DELAY
+
+	lcall INIT
 
 	;setb P0.0
 	;lcall MED_DELAY
