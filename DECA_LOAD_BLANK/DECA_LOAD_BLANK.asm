@@ -172,21 +172,6 @@ UPDATE_DECA:
 	; pop 4
 	pop 3
 	
-	ret
-
-DECA_RESET:
-	mov DECA_STATE, #00h   	; initialize the decatron
-
-	mov R4, DECATRON     	; initialize R4
-
-	setb P0.0 				; turn on K0
-	clr P0.1				; turn off G1
-	clr P0.2 				; turn off G2
-	clr P0.3 				; turn on Kx
-
-	setb P0.4				; turn on the decatron
-
-	setb DECA_FORWARDS? 	; set the direction of the decatron
 ret
 
 
@@ -276,6 +261,22 @@ DECA_TOGGLE:
 	deca_toggle_cont1:
 
 ret 											; exit
+
+
+DECA_RESET:
+	mov DECA_STATE, #00h   	; initialize the decatron
+
+	mov R4, DECATRON     	; initialize R4
+
+	setb P0.0 				; turn on K0
+	clr P0.1				; turn off G1
+	clr P0.2 				; turn off G2
+	clr P0.3 				; turn on Kx
+
+	setb P0.4				; turn on the decatron
+
+	setb DECA_FORWARDS? 	; set the direction of the decatron
+ret
 
 
 

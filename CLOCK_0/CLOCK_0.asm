@@ -17,9 +17,9 @@ ENC_A_ISR:
 
 ; Timer 0 interrupt
 .org 000Bh
-TIME_ISR:
-	lcall UPDATE_TIME 		; update the time
-	reti 					; exit
+TIMER_0_ISR:
+	lcall TIMER_0_SERVICE 		; update the time
+	reti 						; exit
 	
 ; External interrupt 1
 .org 0013h
@@ -109,7 +109,7 @@ INIT:
 	.equ DECA_RESET_CALLED?, 	20h.1
 
 	; Fill in with values
-	mov DECATRON, #2Dh
+	mov DECATRON, #00h
 	mov DECATRON_BUFFER, DECATRON
 	clr DECA_RESET_CALLED?
 	; ===============================
@@ -149,7 +149,7 @@ INIT:
 
 	mov HOURS, 		#00h
 	mov MINUTES, 	#00h
-	mov SECONDS, 	#05h
+	mov SECONDS, 	#37h
 	; ============================
 
 	; ====== Date Variables ======
@@ -204,9 +204,23 @@ INIT:
 
 	; Timer 0 interrupt initialization (for seconds interrupt)
 	mov TMOD, #06h 			; set timer0 as a counter for the seconds (00000110 bin = 06 hex)
-	mov TL0, #0C3h 			; initialize TL0 (#C3h for 60Hz, #CDh for 50Hz)
-	mov TH0, #0C3h 			; initialize TH0 (#C3h for 60Hz, #CDh for 50Hz) - reload value			
+	mov TL0, #0C4h 			; initialize TL0 (#C4h for 60Hz, #CEh for 50Hz)
+	mov TH0, #0C4h 			; initialize TH0 (#C4h for 60Hz, #CEh for 50Hz) - reload value			
 	setb TR0 				; start timer 0
+
+	; IP (interrupt priority) register
+	; _____________________________________________
+	; | - | - | PT2 | PS | PT1 | PX1 | PT0 | PX0 |
+	; |___|___|_____|____|_____|_____|_____|_____|
+	; PT2 (IP.5): timer 2 interrupt priority bit (only 8052)
+	; PS (IP.4): serial port interrupt priority bit
+	; PT1 (IP.3): timer 1 overflow interrupt priority bit
+	; PX1 (IP.2): external interrupt 1 priority bit
+	; PT0 (IP.1): timer 0 overflow interrupt priority bit
+	; PX0 (IP.0): external interrupt 0 priority bit
+
+	; Interrupt priority initialization
+	mov IP, #22h 		; make timer 0 interrpt (update time) highest priority
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	mov SCON, #00h 		; initialize the serial port in mode 0
@@ -305,8 +319,11 @@ ljmp MAIN
 
 SET_TIME:
 	; Disable 60/50Hz timing interrupt
-	clr ET0										; disable timer 0 overflow interrupt
-	clr TR0 									; stop timer0
+	; clr ET0										; disable timer 0 overflow interrupt
+	; clr TR0 										; stop timer0
+
+	clr P0.4										; turn off the decatron
+	mov DECATRON, #1Eh								; move 30 into decatron (to light up full)
 
 	; Enable external interrupts for rotary encoder
 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
@@ -626,12 +643,14 @@ SET_TIME:
 
 	; Set the seconds (defaults to zeroing the seconds)
 	SET_SECONDS:
-		mov SECONDS, #01h 		; FIX: should be set to 0 instead of 1
+		mov SECONDS, #00h 						; set seconds back to 0
+		mov DECATRON, SECONDS 					; move the seconds back into decatron
+		setb P0.4								; turn the decatron back on
 
 	; Restart timer 0
-	setb ET0									; enable timer 0 overflow interrupt
-	mov TL0, #0C3h 								; initialize TL0 (#C3h for 60Hz, #CDh for 50Hz)
-	setb TR0 									; start timer0
+	; setb ET0									; enable timer 0 overflow interrupt
+	; mov TL0, #0C4h 							; initialize TL0 (#C4h for 60Hz, #CEh for 50Hz)
+	; setb TR0 									; start timer0
 
 	; Change the clock state
 	mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
@@ -640,20 +659,35 @@ ljmp MAIN
 
 
 
-UPDATE_TIME:
+TIMER_0_SERVICE:
+	
+	; push any used SFRs onto the stack to preserve their values
+	push acc
+
+	mov a, CLOCK_STATE									; move CLOCK_STATE into the accumulator
+
+	cjne a, SET_TIME_STATE, timer_0_service_cont0		; check if CLOCK_STATE is SET_TIME_STATE
+		cpl P0.4										; if CLOCK_STATE is SET_TIME_STATE, flash the decatron
+		ljmp timer_0_service_cont1						; jump to the end of ISR
+	timer_0_service_cont0:
+
+
 	inc SECONDS 			; increment the seconds
 	mov R6, SECONDS
-	cjne R6, #3Ch, update_time_cont0
-		mov SECONDS, #01h
+	cjne R6, #3Ch, timer_0_service_cont1
+		mov SECONDS, #00h
 		inc MINUTES
 		mov R6, MINUTES
-		cjne R6, #3Ch, update_time_cont0
+		cjne R6, #3Ch, timer_0_service_cont1
 			mov MINUTES, #00h
 			inc HOURS
 			mov R6, HOURS
-			cjne R6, #18h, update_time_cont0  ; if hours is 24 decimal, new day
+			cjne R6, #18h, timer_0_service_cont1  ; if hours is 24 decimal, new day
 				mov HOURS, #00h
-	update_time_cont0:
+	timer_0_service_cont1:
+
+	; pop the original SFR values back into their place and restore their values
+	pop acc
 ret 			 			; exit
 
 
@@ -916,6 +950,8 @@ UPDATE_DECA:
 		update_deca_cont3:
 		; if swiping clockwise
 		setb P0.1 								; pull G1 low (note inverter between 8051 pin and decatron)
+		clr P0.3 								; pull Kx high (note inverter between 8051 pin and decatron)
+		clr P0.0 								; pull K0 high (note inverter between 8051 pin and decatron)
 		inc DECA_STATE 							; DECA_STATE:  0 --> 1
 		sjmp update_deca_cont6 					; exit
 	update_deca_cont2:
@@ -924,6 +960,8 @@ UPDATE_DECA:
 		jb DECA_FORWARDS?, update_deca_cont5 	; check direction of swiping
 			; if swiping counter-clockwise
 			setb P0.2 							; pull G2 low (note inverter between 8051 pin and decatron)
+			clr P0.3 							; pull Kx high (note inverter between 8051 pin and decatron)
+			clr P0.0 							; pull K0 high (note inverter between 8051 pin and decatron)
 			dec DECA_STATE 						; DECA_STATE:  1 --> 0
 			sjmp update_deca_cont6 				; exit
 		update_deca_cont5:
@@ -937,11 +975,15 @@ UPDATE_DECA:
 	cjne R3, #02h, update_deca_cont6 			; if we are in DECA_STATE 1, jump the arc to Kx
 		jb DECA_FORWARDS?, update_deca_cont7 	; check direction of swiping
 			; if swiping counter-clockwise
+			setb P0.3 							; pull Kx low (note inverter between 8051 pin and decatron)
+			setb P0.0 							; pull K0 low (note inverter between 8051 pin and decatron)
 			clr P0.1 							; pull G1 high (note inverter between 8051 pin and decatron)
 			dec DECA_STATE 						; DECA_STATE:  2 --> 1
 			sjmp update_deca_cont6 				; exit
 		update_deca_cont7:
 		; if swiping clockwise
+		setb P0.3 								; pull Kx low (note inverter between 8051 pin and decatron)
+		setb P0.0 								; pull K0 low (note inverter between 8051 pin and decatron)
 		clr P0.2 								; pull G2 high (note inverter between 8051 pin and decatron)
 		mov DECA_STATE, #00h 					; DECA_STATE:  2 --> 0
 		sjmp update_deca_cont6 					; exit
@@ -952,35 +994,6 @@ UPDATE_DECA:
 	; pop 4
 	pop 3
 	
-ret
-
-
-
-DECA_RESET:
-	mov DECA_STATE, #00h   	; initialize the decatron
-
-	mov R4, DECATRON     	; initialize R4
-	
-	setb P0.0				; reset decatron
-	lcall LONG_DELAY
-	clr P0.0
-	lcall LONG_DELAY
-
-	setb P0.0				; reset decatron
-	lcall LONG_DELAY
-	clr P0.0
-	lcall LONG_DELAY
-
-	setb P0.0				; reset decatron
-	lcall LONG_DELAY
-	clr P0.0
-	lcall LONG_DELAY
-
-	clr P0.1
-	clr P0.2
-
-	setb DECA_FORWARDS? 	; set the direction of the decatron
-
 ret
 
 
@@ -1003,16 +1016,32 @@ DECA_TOGGLE:
 	cpl DECA_FORWARDS? 							; toggle the swiping direction
 
 	mov a, DECATRON   							; move DECATRON into the accumulator
+	cjne a, #00h, deca_toggle_cont8				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end, otherwise, continue
+		
+		; FIX -- FOR FAST MODE
+		;mov DECATRON, #01						; move 1 into decatron (don't blank in fast mode, so the decatron always starts in the same spot)
+		;lcall DECA_RESET 						; reset the decatron (light up K0)
+		;sjmp deca_toggle_cont1 				; exit (NOTE: "ret" DOES NOT work for some reason...)
+
+		clr P0.4								; turn off the decatron
+		clr P0.0								; turn off K0
+		clr P0.1								; turn off G1
+		clr P0.2								; turn off G2
+		clr P0.3								; turn off Kx
+		sjmp deca_toggle_cont1 					; exit (NOTE: "ret" DOES NOT work for some reason...)
+	deca_toggle_cont8:
+
+	mov a, DECATRON   							; move DECATRON into the accumulator
 	cjne a, #01h, deca_toggle_cont0				; if DECATRON = 1, then no need to toggle, skip to the end, otherwise, continue
-		mov R4, DECATRON 						; reload R4
+		;mov R4, DECATRON 						; reload R4
+		lcall DECA_RESET 						; reset the decatron (light up K0)
 		sjmp deca_toggle_cont1 					; exit (NOTE: "ret" DOES NOT work for some reason...)
 	deca_toggle_cont0:
 
 	; see if DECATRON is greater than or less than (or equal to) 30
 	clr c 										; clear the carry bit
 	mov a, #1Eh									; move 30 into the accumulator
-	subb a, DECATRON							; perform 30-DECATRON.  if DECATRON is greater than 30, the carry flag (c) will
-												; be set
+	subb a, DECATRON							; perform 30-DECATRON.  if DECATRON is greater than 30, the carry flag (c) will be set
 
 	jb DECA_FORWARDS?, deca_toggle_cont2
 		; if going from forwards to backwards
@@ -1059,7 +1088,23 @@ DECA_TOGGLE:
 
 	deca_toggle_cont1:
 
-ret 	 										; exit
+ret 											; exit
+
+
+DECA_RESET:
+	mov DECA_STATE, #00h   	; initialize the decatron
+
+	mov R4, DECATRON     	; initialize R4
+
+	setb P0.0 				; turn on K0
+	clr P0.1				; turn off G1
+	clr P0.2 				; turn off G2
+	clr P0.3 				; turn on Kx
+	
+	setb P0.4				; turn on the decatron
+
+	setb DECA_FORWARDS? 	; set the direction of the decatron
+ret
 
 
 ENC_A:
@@ -1138,19 +1183,6 @@ ENC_B:
 	; pop the original SFR values back into their place and restore their values
 	pop acc
 ret 											; exit
-
-
-
-LONG_DELAY:
-	mov R7, #0FFh								; load R7 for 255 counts
-	mov R1, #0FFh								; load R1 for 255 counts		
-
-	loop2:
-		djnz R1, loop2							; decrement count in R1
-	mov R1, #0FFh								; reload R1 in case loop is needed again
-	
-	djnz R7, loop2								; count R1 down again until R7 counts down
-ret
 
 
 end
