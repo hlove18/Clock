@@ -39,8 +39,8 @@ SERIAL_ISR:
 INIT:
 ; ====== GPS State Variables ======
 	; State Variables:
-	.equ GPS_STATE, 			6Fh
-	.equ GPS_NEXT_STATE, 		6Fh
+	.equ GPS_STATE, 			7Dh
+	.equ GPS_NEXT_STATE, 		7Ch
 
 	; $GPRMC,hhmmss.sss,A,llll.llll,a,yyyyy.yyyy,a,speed,angle,ddmmyy,,,A*77
 	; $GPRMC,040555.000,A,3725.4817,N,12209.5683,W,0.42,201.93,070320,,,D*78
@@ -127,11 +127,11 @@ INIT:
 
 ; =============================
 
-;lcall GPS_OBTAIN_FIX_INIT
-setb EA 				; enable interrupts
-clr P1.6
-clr P1.7
-lcall GPS_OBTAIN_DATA_INIT
+lcall GPS_OBTAIN_FIX_INIT
+; setb EA 				; enable interrupts
+; clr P1.6
+; clr P1.7
+; lcall GPS_OBTAIN_DATA_INIT
 
 ljmp MAIN
 	
@@ -186,6 +186,8 @@ GPS_OBTAIN_DATA_INIT:
 	mov SCON, #50h		;mode 1, receive enabled
 	; Enable serial interrupt
 	setb ES
+	clr ET0				; clear timer 0 overflow interrupt
+	clr ET1				; clear timer 1 overflow Interrupt
 	; Configure timer 1 in auto-reload mode (mode 2) - For baud rate generation.
 	; Configure timer 0 back to counting seconds (just so we don't have to do it when we transistion out of GPS state)
 	; NOTE: high nibble of TMOD is for timer 1, low nibble is for timer 0
@@ -271,21 +273,7 @@ SERIAL_SERVICE:
 		mov R4, #00h 													; R4 keeps track of how many times things loop (like how long to loop in the GPS_WAIT_FOR_TIME state)	
 		xrl CALCULATED_GPS_CHECKSUM, a									; keep updating the CALCULATED_GPS_CHECKSUM
 		djnz GPS_WAIT_TIME, gps_wait_cont0								; decrement until done waiting
-			; mov GPS_STATE, GPS_NEXT_STATE								; if wait is over, load GPS_STATE with the next state.
-			; mov GPS_NEXT_STATE, GPS_STATE								; if wait is over, load GPS_STATE with the next state.
-			mov GPS_STATE, #08h
-
-
-			setb P1.7
-			mov R5, GPS_STATE
-			cjne R5, #08h, poopy
-				setb P1.6
-			poopy:
-
-			poopyloop:
-			sjmp poopyloop
-		
-
+			mov GPS_STATE, GPS_NEXT_STATE								; if wait is over, load GPS_STATE with the next state.
 		gps_wait_cont0:
 			ljmp serial_service_end										; jump to end
 	serial_service_cont0:
@@ -504,11 +492,11 @@ SERIAL_SERVICE:
 			mov RECEIVED_GPS_CHECKSUM, a 								; move partial result into RECEIVED_GPS_CHECKSUM
 			ljmp serial_service_end										; jump to end
 		append_low_nibble:
-			anl a, RECEIVED_GPS_CHECKSUM								; append the low nibble by bitwise AND (NOTE: the lower nibble of RECEIVED_GPS_CHECKSUM should be 0)!
+			orl a, RECEIVED_GPS_CHECKSUM								; append the low nibble by bitwise OR (NOTE: the lower nibble of RECEIVED_GPS_CHECKSUM should be 0)!
 			mov RECEIVED_GPS_CHECKSUM, a 								; move the final result into RECEIVED_GPS_CHECKSUM
 			cjne a, CALCULATED_GPS_CHECKSUM, serial_reset_GPS_STATE		; compare RECEIVED_GPS_CHECKSUM (which should still be in a) with the CALCULATED_GPS_CHECKSUM
 				; HAVE RECEIVED COMPLETE GPS NMEA $GPRMC SENTENCE
-				; setb P1.7 											; turn on GPS SYNC light
+				setb P1.7 											; turn on GPS SYNC light
 				loop1: 
 				sjmp loop1 		; spin in place
 	serial_service_cont13:
@@ -549,14 +537,14 @@ ASCII_TO_HEX:
 
 	mov R0, a 					; save orignial a value in R0
 	clr c 						; clear the carry flag
-	subb a, #39h 				; compare the received SBUF (ascii) with #39.  if the received data is greater than #39, then the carry flag is set
-	jc convert_alpha			; if the carry flag is set, we are dealing with A, B, C, D, E, or F
+	subb a, #39h 				; compare the received SBUF (ascii) with #39h.  if the received data is less than #39h, then the carry flag is set
+	jnc convert_alpha			; if the carry flag is NOT set, we are dealing with A, B, C, D, E, or F
 		mov a, R0				; restore original a value
 		anl a, #0Fh 			; convert numeric ascii to hex code
 		ljmp ascii_to_hex_end	; jump to end
 	convert_alpha:				
 		mov a, R0				; restore original a value
-		subb a, #37h			; convert alpha ascii to hex code
+		;subb a, #37h			; convert alpha ascii to hex code
 
 	ascii_to_hex_end:
 
