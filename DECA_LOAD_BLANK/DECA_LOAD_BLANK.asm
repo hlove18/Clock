@@ -79,7 +79,7 @@ INIT:
 
 MAIN:
 
-	lcall LONG_DELAY
+	;lcall LONG_DELAY
 	lcall LONG_DELAY
 	inc DECATRON
 	mov R7, DECATRON

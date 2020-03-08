@@ -1,7 +1,7 @@
 ; VFD
 ; HENRY LOVE
 ; 06/05/19
-; This program uses timer 2 to update the vfd.
+; This program uses timer 2 to update the Nixies.
 
 ; ======Registers======
 ; R0 - used in delay fxn
@@ -60,7 +60,7 @@ INIT:
 	; to display on each repsective VFD grid
 	.equ NIX_INDX, 25h
 
-	; Intialize date with sample date: 03-11-16
+	; Intialize
 	mov NIX4, #04h
 	mov NIX3, #03h
 	mov NIX2, #02h
@@ -83,6 +83,11 @@ INIT:
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	; mov SCON, #00h 		; initialize the serial port in mode 0
+
+	; Turn on the NIXIE Colon:
+	setb P1.4
+	; Turn off the alarm
+	clr P1.1
 
 	sjmp MAIN
 

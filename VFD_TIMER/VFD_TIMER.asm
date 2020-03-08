@@ -71,11 +71,18 @@ INIT:
 	; Timer 2 interrupt initialization
 	setb ET2			; enable timer 2 interrupt
 	mov T2CON, #04h		; set timer 2 in auto reload
-	mov RCAP2H, #0FFh	; set high byte of timer 2 reload
-	mov RCAP2L, #000h	; set low byte of timer 2 reload 
+	
+	;mov RCAP2H, #0FFh	; set high byte of timer 2 reload
+	;mov RCAP2L, #000h	; set low byte of timer 2 reload
+
+	mov RCAP2H, #0FAh	; set high byte of timer 2 reload
+	mov RCAP2L, #00h	; set low byte of timer 2 reload 
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	mov SCON, #00h 		; initialize the serial port in mode 0
+
+	; Turn off the alarm
+	clr P1.1
 
 	sjmp MAIN
 
@@ -120,7 +127,7 @@ UPDATE_VFD:
 		mov SBUF, #0FCh					; send the third byte down the serial line
 		jnb TI, $ 						; wait for the entire byte to be sent
 		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
-		sjmp update_vfd_cont12			; go to end of "case statement"
+		ljmp update_vfd_cont12			; go to end of "case statement"
 	update_vfd_cont1:
 
 	; "1" numeral
@@ -128,7 +135,7 @@ UPDATE_VFD:
 		mov SBUF, #060h					; send the third byte down the serial line
 		jnb TI, $ 						; wait for the entire byte to be sent
 		clr TI 							; the transmit interrupt flag is set by hardware but must be cleared by software
-		sjmp update_vfd_cont12			; go to end of "case statement"
+		ljmp update_vfd_cont12			; go to end of "case statement"
 	update_vfd_cont2:
 
 	; "2" numeral
