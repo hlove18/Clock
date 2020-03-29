@@ -476,7 +476,7 @@ SERIAL_SERVICE:
 	; "*"
 	; GPS_WAIT_FOR_STAR:
 	cjne R3, #0Dh, serial_service_cont12
-		cjne a, #2Ah, serial_service_end								; check if received serial data is "*"
+		cjne a, #2Ah, serial_service_end	;3/14/2020 SHOULD THIS GO TO serial_reset_GPS_STATE?????!!!!!!!!!!							; check if received serial data is "*"
 			; mov GPS_STATE, GPS_WAIT_FOR_CHECKSUM						; if received correct character, update GPS_STATE
 			mov GPS_STATE, #0Eh 										; if received correct character, update GPS_STATE
 			ljmp serial_service_end										; jump to end

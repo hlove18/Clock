@@ -39,6 +39,8 @@ DISPLAY_ISR:
 INIT:
 	mov R5, #0Ch			; move 12 into R5 for displays update (nixie is displayed 1/12 as often as VFD and decatron)
 
+	mov R7, #090h 			; try toggling the flashing less often
+
 	; ====== State Variables ======
 	; State Variable:
 	.equ CLOCK_STATE, 7Fh
@@ -130,13 +132,15 @@ INIT:
 	.equ A_FLAG, 			21h.0
 	.equ B_FLAG, 			21h.1
 	.equ BUTTON_FLAG, 		21h.2
-	.equ INC_LEAP_YEAR?,	21h.3	
+	.equ INC_LEAP_YEAR?,	21h.3
+	.equ ROT_FLAG, 			21h.4	
 
 	; Fill in with values
 	clr A_FLAG
 	clr B_FLAG
 	clr BUTTON_FLAG
 	clr INC_LEAP_YEAR?
+	clr ROT_FLAG
 
 	; Setup for rotary enocder pull-up resistors
 	setb P3.2 						; Set P3.2 high to use internal pull-up resistor
@@ -156,7 +160,8 @@ INIT:
 
 	mov HOURS, 		#00h
 	mov MINUTES, 	#00h
-	mov SECONDS, 	#37h
+	;mov SECONDS, 	#37h
+	mov SECONDS, 	#00h
 	; ============================
 
 	; ====== Date Variables ======
@@ -231,7 +236,7 @@ INIT:
 	setb TR0 				; start timer 0
 
 	; IP (interrupt priority) register
-	; _____________________________________________
+	; ____________________________________________
 	; | - | - | PT2 | PS | PT1 | PX1 | PT0 | PX0 |
 	; |___|___|_____|____|_____|_____|_____|_____|
 	; PT2 (IP.5): timer 2 interrupt priority bit (only 8052)
@@ -351,8 +356,10 @@ SET_TIME:
 	; clr ET0										; disable timer 0 overflow interrupt
 	; clr TR0 										; stop timer0
 
-	clr P0.4										; turn off the decatron
-	mov DECATRON, #1Eh								; move 30 into decatron (to light up full)
+	; clr P0.4										; turn off the decatron
+	; mov DECATRON, #1Eh								; move 30 into decatron (to light up full)
+
+	clr ROT_FLAG									; clear the ROT_FLAG
 
 	; Enable external interrupts for rotary encoder
 	;clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
@@ -364,8 +371,8 @@ SET_TIME:
 	SET_MM:
 
 		; Move in mask values
-		mov VFD_FLASH_MASK, #27h
-		mov NIX_FLASH_MASK, #0Fh
+		mov VFD_FLASH_MASK, #0FCh
+		mov NIX_FLASH_MASK, #0FFh
 
 		; Set the upper and lower bounds
 		mov UPPER_BOUND, #0Ch 					; months can be 12 max
@@ -414,8 +421,8 @@ SET_TIME:
 	SET_DD:
 
 		; Move in mask values
-		mov VFD_FLASH_MASK, #3Ch
-		mov NIX_FLASH_MASK, #0Fh
+		mov VFD_FLASH_MASK, #0E7h
+		mov NIX_FLASH_MASK, #0FFh
 
 		; Set the upper and lower bounds
 		mov R2, MONTH
@@ -536,8 +543,8 @@ SET_TIME:
 	SET_YY:
 
 		; Move in mask values
-		mov VFD_FLASH_MASK, #0E4h
-		mov NIX_FLASH_MASK, #0Fh
+		mov VFD_FLASH_MASK, #3Fh
+		mov NIX_FLASH_MASK, #0FFh
 
 		; Set the upper and lower bounds
 		mov LOWER_BOUND, #00h 					; years can be 00 min
@@ -609,8 +616,8 @@ SET_TIME:
 	SET_HR:
 
 		; Move in mask values
-		mov VFD_FLASH_MASK, #00h
-		mov NIX_FLASH_MASK, #3Fh
+		mov VFD_FLASH_MASK, #0FFh
+		mov NIX_FLASH_MASK, #0CFh
 
 		; clear the leap year bit
 		clr INC_LEAP_YEAR?
@@ -662,8 +669,8 @@ SET_TIME:
 	SET_MIN:
 
 		; Move in mask values
-		mov VFD_FLASH_MASK, #00h
-		mov NIX_FLASH_MASK, #0CFh
+		mov VFD_FLASH_MASK, #0FFh
+		mov NIX_FLASH_MASK, #3Fh
 
 		; Set the upper and lower bounds
 		mov UPPER_BOUND, #3Bh 					; minutes can be 59 max
@@ -711,9 +718,20 @@ SET_TIME:
 
 	; Set the seconds (defaults to zeroing the seconds)
 	SET_SECONDS:
-		mov SECONDS, #00h 						; set seconds back to 0
-		mov DECATRON, SECONDS 					; move the seconds back into decatron
-		setb P0.4								; turn the decatron back on
+		; mov SECONDS, #00h 						; set seconds back to 0
+		; mov DECATRON, SECONDS 					; move the seconds back into decatron
+
+		; WORKED THE BEST BUT IMMEDIATELY INCREMENTS MINUTES
+		;mov SECONDS, #3Bh 						; set seconds back to 0
+		;clr P0.4
+
+
+		mov SECONDS, #30h 						; set seconds back to 0
+		;mov DECATRON, SECONDS 					; move the seconds back into decatron
+		; mov DECA_STATE, #02h
+		; mov R4, #01h
+
+		;setb P0.4								; turn the decatron back on
 
 	; Restart timer 0
 	; setb ET0									; enable timer 0 overflow interrupt
@@ -725,6 +743,7 @@ SET_TIME:
 
 	; Change the clock state
 	mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
+	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, OR FLAHING WILL CONTINUE IN DECA_TRANSITION)
 
 ljmp MAIN
 
@@ -736,28 +755,28 @@ TIMER_0_SERVICE:
 	push acc
 	push PSW
 
-	mov a, CLOCK_STATE									; move CLOCK_STATE into the accumulator
+	; mov a, CLOCK_STATE									; move CLOCK_STATE into the accumulator
 
-	cjne a, SET_TIME_STATE, timer_0_service_cont0		; check if CLOCK_STATE is SET_TIME_STATE
-		cpl P0.4										; if CLOCK_STATE is SET_TIME_STATE, flash the decatron
+	; cjne a, SET_TIME_STATE, timer_0_service_cont0		; check if CLOCK_STATE is SET_TIME_STATE
+	; 	cpl P0.4										; if CLOCK_STATE is SET_TIME_STATE, flash the decatron
 
-		jb P0.4, timer_0_service_cont2
-			; if P0.4 is low (decatron is off), turn off all grids/nixies except for the one being set
-			mov VFD_MASK, VFD_FLASH_MASK
-			mov NIX_MASK, NIX_FLASH_MASK
-			ljmp timer_0_service_cont1					; jump to the end of ISR
-		timer_0_service_cont2:
-			; if P0.4 is high (decatron is on), turn on all grids/nixies
-			mov VFD_MASK, #0FFh
-			mov NIX_MASK, #0FFh
+	; 	jb P0.4, timer_0_service_cont2
+	; 		; if P0.4 is low (decatron is off), turn off all grids/nixies except for the one being set
+	; 		mov VFD_MASK, VFD_FLASH_MASK
+	; 		mov NIX_MASK, NIX_FLASH_MASK
+	; 		ljmp timer_0_service_cont1					; jump to the end of ISR
+	; 	timer_0_service_cont2:
+	; 		; if P0.4 is high (decatron is on), turn on all grids/nixies
+	; 		mov VFD_MASK, #0FFh
+	; 		mov NIX_MASK, #0FFh
 
-		ljmp timer_0_service_cont1						; jump to the end of ISR
+	; 	ljmp timer_0_service_cont1						; jump to the end of ISR
 
-	timer_0_service_cont0:
+	; timer_0_service_cont0:
 	
-	; Move in mask values (so displays turn on after flashing in set mode)
-	mov VFD_MASK, #0FFh
-	mov NIX_MASK, #0FFh
+	; ; Move in mask values (so displays turn on after flashing in set mode)
+	; mov VFD_MASK, #0FFh
+	; mov NIX_MASK, #0FFh
 
 	inc SECONDS 			; increment the seconds
 	mov R6, SECONDS
@@ -786,8 +805,40 @@ UPDATE_DISPLAYS:
 	; ISSUE?
 	djnz R5, update_displays_cont0		; decrement the display update count, if it is zero, update the nixies
 		lcall UPDATE_NIX				; update the nixies
+		lcall FLASH_DISPLAYS 			; flash displays for set modes
 		mov R5, #0Ch					; reset R5 with a value of 12
 	update_displays_cont0:
+ret
+
+
+FLASH_DISPLAYS:
+	push acc
+
+	mov a, CLOCK_STATE									; move CLOCK_STATE into the accumulator
+	cjne a, SET_TIME_STATE, flash_displays_cont0		; check if in SET_TIME_STATE, otherwise skip this
+
+	djnz R7, flash_displays_cont1						; decrement the flash display count, if it is zero, toggle mask
+		mov R7, #090h									; reset R7 for next interrupt
+		cpl P0.4										; if CLOCK_STATE is SET_TIME_STATE, flash the decatron
+		mov DECATRON, #1Eh								; move 30 into decatron (to light up full)
+
+		jb P0.4, flash_displays_cont0
+			; if P0.4 is low (decatron is off), check if we should flash displays (i.e. if ROT_FLAG is not set)
+			jb ROT_FLAG, flash_displays_cont0
+				; if P0.4 is low (decatron is off) and ROT_FLAG is not set, blink the display being set
+				mov VFD_MASK, VFD_FLASH_MASK
+				mov NIX_MASK, NIX_FLASH_MASK
+				ljmp flash_displays_cont1					; jump to the end of routine
+
+	flash_displays_cont0:
+		; if P0.4 is high (decatron is on), turn on all grids/nixies
+		mov VFD_MASK, #0FFh
+		mov NIX_MASK, #0FFh
+
+		clr ROT_FLAG				; clear the rotation flag (gets set in ENC_A or ENC_B ISR)
+
+	flash_displays_cont1:
+	pop acc
 ret
 
 
@@ -1025,12 +1076,37 @@ UPDATE_DECA:
 	push acc
 	push PSW 
 	
-	jb DECA_RESET_CALLED?, update_deca_cont0	; check if the decatron needs to be initialized
-		lcall DECA_RESET 						; call the decatron init function
-		setb DECA_RESET_CALLED?					; set DECA_RESET_CALLED? flag
-	update_deca_cont0:
+	; jb DECA_RESET_CALLED?, update_deca_cont0	; check if the decatron needs to be initialized
+	; 	lcall DECA_RESET 						; call the decatron init function
+	; 	setb DECA_RESET_CALLED?					; set DECA_RESET_CALLED? flag
+	; update_deca_cont0:
 
 	mov R3, DECA_STATE							; move DECA_STATE to R3
+
+	;============
+	mov a, DECATRON   							; move DECATRON into the accumulator
+	cjne a, #00h, deca_test_cont0				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end, otherwise, continue
+		
+		; FIX -- FOR FAST MODE
+		;mov DECATRON, #01						; move 1 into decatron (don't blank in fast mode, so the decatron always starts in the same spot)
+		;lcall DECA_RESET 						; reset the decatron (light up K0)
+		;sjmp deca_toggle_cont1 				; exit (NOTE: "ret" DOES NOT work for some reason...)
+
+		clr P0.4								; turn off the decatron
+		clr P0.0								; turn off K0
+		clr P0.1								; turn off G1
+		clr P0.2								; turn off G2
+		clr P0.3								; turn off Kx
+		ljmp update_deca_cont6 					; exit (NOTE: "ret" DOES NOT work for some reason...)
+	deca_test_cont0:
+
+	; mov a, DECATRON   							; move DECATRON into the accumulator
+	cjne a, #01h, deca_test_cont1				; if DECATRON = 1, then no need to toggle, skip to the end, otherwise, continue
+		;mov R4, DECATRON 						; reload R4
+		lcall DECA_RESET 						; reset the decatron (light up K0)
+		ljmp update_deca_cont6 					; exit (NOTE: "ret" DOES NOT work for some reason...)
+	deca_test_cont1:
+	;============
 
 	djnz R4, update_deca_cont1 					; decrement R4 by 1, and check if it is zero
 		lcall DECA_TOGGLE						; if R4 is zero, toggle the deca (call DECA_TOGGLE)
@@ -1069,7 +1145,7 @@ UPDATE_DECA:
 		sjmp update_deca_cont6 					; exit
 	update_deca_cont4:
 
-	cjne R3, #02h, update_deca_cont6 			; if we are in DECA_STATE 1, jump the arc to Kx
+	cjne R3, #02h, update_deca_cont6 			; if we are in DECA_STATE 2, jump the arc to Kx
 		jb DECA_FORWARDS?, update_deca_cont7 	; check direction of swiping
 			; if swiping counter-clockwise
 			setb P0.3 							; pull Kx low (note inverter between 8051 pin and decatron)
@@ -1113,28 +1189,28 @@ DECA_TOGGLE:
 
 	cpl DECA_FORWARDS? 							; toggle the swiping direction
 
-	mov a, DECATRON   							; move DECATRON into the accumulator
-	cjne a, #00h, deca_toggle_cont8				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end, otherwise, continue
+	; mov a, DECATRON   							; move DECATRON into the accumulator
+	; cjne a, #00h, deca_toggle_cont8				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end, otherwise, continue
 		
-		; FIX -- FOR FAST MODE
-		;mov DECATRON, #01						; move 1 into decatron (don't blank in fast mode, so the decatron always starts in the same spot)
-		;lcall DECA_RESET 						; reset the decatron (light up K0)
-		;sjmp deca_toggle_cont1 				; exit (NOTE: "ret" DOES NOT work for some reason...)
+	; 	; FIX -- FOR FAST MODE
+	; 	;mov DECATRON, #01						; move 1 into decatron (don't blank in fast mode, so the decatron always starts in the same spot)
+	; 	;lcall DECA_RESET 						; reset the decatron (light up K0)
+	; 	;sjmp deca_toggle_cont1 				; exit (NOTE: "ret" DOES NOT work for some reason...)
 
-		clr P0.4								; turn off the decatron
-		clr P0.0								; turn off K0
-		clr P0.1								; turn off G1
-		clr P0.2								; turn off G2
-		clr P0.3								; turn off Kx
-		sjmp deca_toggle_cont1 					; exit (NOTE: "ret" DOES NOT work for some reason...)
-	deca_toggle_cont8:
+	; 	clr P0.4								; turn off the decatron
+	; 	clr P0.0								; turn off K0
+	; 	clr P0.1								; turn off G1
+	; 	clr P0.2								; turn off G2
+	; 	clr P0.3								; turn off Kx
+	; 	sjmp deca_toggle_cont1 					; exit (NOTE: "ret" DOES NOT work for some reason...)
+	; deca_toggle_cont8:
 
-	mov a, DECATRON   							; move DECATRON into the accumulator
-	cjne a, #01h, deca_toggle_cont0				; if DECATRON = 1, then no need to toggle, skip to the end, otherwise, continue
-		;mov R4, DECATRON 						; reload R4
-		lcall DECA_RESET 						; reset the decatron (light up K0)
-		sjmp deca_toggle_cont1 					; exit (NOTE: "ret" DOES NOT work for some reason...)
-	deca_toggle_cont0:
+	; ; mov a, DECATRON   							; move DECATRON into the accumulator
+	; cjne a, #01h, deca_toggle_cont0				; if DECATRON = 1, then no need to toggle, skip to the end, otherwise, continue
+	; 	;mov R4, DECATRON 						; reload R4
+	; 	lcall DECA_RESET 						; reset the decatron (light up K0)
+	; 	sjmp deca_toggle_cont1 					; exit (NOTE: "ret" DOES NOT work for some reason...)
+	; deca_toggle_cont0:
 
 	; see if DECATRON is greater than or less than (or equal to) 30
 	clr c 										; clear the carry bit
@@ -1190,79 +1266,42 @@ ret 											; exit
 
 
 DECA_RESET:
-	mov DECA_STATE, #00h   	; initialize the decatron
+	mov DECA_STATE, #00h   			; initialize the decatron
 
-	mov R4, DECATRON     	; initialize R4
+	mov R4, DECATRON     			; initialize R4
+	mov DECATRON_BUFFER, DECATRON   ; reset the decatron DECATRON_BUFFER (!!! Important or the decatron will flash - reason for decatron bug after
+									; coming out of the SET_TIME state)
 
-	setb P0.0 				; turn on K0
-	clr P0.1				; turn off G1
-	clr P0.2 				; turn off G2
-	clr P0.3 				; turn on Kx
+	setb P0.0 						; turn on K0
+	clr P0.1						; turn off G1
+	clr P0.2 						; turn off G2
+	clr P0.3 						; turn off Kx
 	
-	setb P0.4				; turn on the decatron
+	setb P0.4						; turn on the decatron
 
-	setb DECA_FORWARDS? 	; set the direction of the decatron
+	setb DECA_FORWARDS? 			; set the direction of the decatron
 ret
 
-; ENC_A:
-; 	; push any used SFRs onto the stack to preserve their values
-; 	push acc
-; 	push PSW
+DECA_TRANSITION:
+	; This function is used to start the decatron at an arbitrary number of seconds.  It does so by starting with DECATRON at zero,
+	; then quickily incrementing DECATRON (fast mode) until DECATRON == SECONDS.  An example where this transistion would be used
+	; is going from SET ALARM --> SHOW TIME
 
-; 	clr c 										; clear the carry bit
+	mov DECATRON, #00h 								; start with DECATRON=0
+	lcall MED_DELAY 								; delay
+	deca_transition_loop:
+		mov a, SECONDS 								; move seconds into the accumulator
+		cjne a, DECATRON, deca_transition_cont0
+			ljmp deca_transition_cont1 				; if SECONDS (a) == DECATRON, then exit
+		deca_transition_cont0:
+		; if SECONDS (a) != DECATRON:
+		lcall MED_DELAY  							; delay 
+		inc DECATRON 								; increment the DECATRON
+	ljmp deca_transition_loop 						; loop
+	deca_transition_cont1:
 
-; 	jb P3.3, enc_a_decrement 					; check state of ENC_B line
-; 												; if ENC_B is low, increment
-; 												; if ENC_B is high, decrement
-; 	enc_a_increment:
-; 		inc @R0 									; increment the register R0 is pointing to
+ret
 
-; 		jnb INC_LEAP_YEAR?, enc_a_cont2				; check if INC_LEAP_YEAR? bit is set
-; 			;if INC_LEAP_YEAR? bit is set, increment @R0 (YEAR) three more times (for a total of 4 times) 
-; 			inc @R0
-; 			inc @R0
-; 			inc @R0
-; 		enc_a_cont2:
-
-; 		; check if @R0 is greater than UPPER_BOUND
-; 		mov a, UPPER_BOUND 							; move UPPER_BOUND into accumulator
-; 		subb a, @R0 								; subtract a - @R0
-; 		jnc enc_a_cont1 							; jump to end if carry is not set
-; 			; if @R0 is greater than UPPER_BOUND:
-; 			mov @R0, LOWER_BOUND 					; rollover @R0
-; 			ljmp enc_a_cont1
-
-; 	enc_a_decrement:
-; 		dec @R0										; decrement the register R0 is pointing to
-
-; 		jnb INC_LEAP_YEAR?, enc_a_cont3				; check if INC_LEAP_YEAR? bit is set
-; 			;if INC_LEAP_YEAR? bit is set, decrement @R0 (YEAR) three more times (for a total of 4 times) 
-; 			dec @R0
-; 			dec @R0
-; 			dec @R0
-; 		enc_a_cont3:
-
-; 		; check if @R0 is less than LOWER_BOUND
-; 		mov a, @R0 									; move @R0 into accumulator
-; 		subb a, LOWER_BOUND 						; subtract a - LOWER_BOUND
-; 		jnc enc_a_cont4 							; jump to end if carry is not set
-; 			; if @R0 is less than LOWER_BOUND:
-; 			mov @R0, UPPER_BOUND 					; rollover @R0
-; 		enc_a_cont4:
-
-; 		; !! EDGE CASE: if the lower bound is zero, dec @R0 will rollover to 255, which still looks larger than LOWER_BOUND.
-; 		; check if @R0 is greater than UPPER_BOUND
-; 		mov a, UPPER_BOUND 							; move UPPER_BOUND into accumulator
-; 		subb a, @R0 								; subtract a - @R0
-; 		jnc enc_a_cont1 							; jump to end if carry is not set
-; 			; if @R0 is greater than UPPER_BOUND:
-; 			mov @R0, UPPER_BOUND 					; rollover @R0
-
-; 	enc_a_cont1:
-; 	; pop the original SFR values back into their place and restore their values
-; 	pop PSW
-; 	pop acc
-; 	ret 											; exit
 
 ENC_A:
 	; push any used SFRs onto the stack to preserve their values
@@ -1277,6 +1316,9 @@ ENC_A:
 	enc_a_cont0:
 	jb A_FLAG, enc_a_cont1
 		inc @R0
+		setb ROT_FLAG								; set the rotation flag
+		mov VFD_MASK, #0FFh							; make all displays visible
+		mov NIX_MASK, #0FFh							; make all displays visible
 		setb A_FLAG
 	enc_a_cont1:
 
@@ -1321,6 +1363,9 @@ ENC_B:
 	enc_b_cont0:
 	jb B_FLAG, enc_b_cont1
 		dec @R0
+		setb ROT_FLAG								; set the rotation flag
+		mov VFD_MASK, #0FFh							; make all displays visible
+		mov NIX_MASK, #0FFh							; make all displays visible
 		setb B_FLAG
 	enc_b_cont1:
 
@@ -1407,5 +1452,48 @@ TWLV_TWFR_HOUR_ADJ:
 
 ret
 
+SHORT_DELAY:
+	push 0 					; push R0 onto the stack to preserve its value
+	
+	mov R0, #0FFh			; load R0 for 255 counts
+	short_delay_loop:
+	djnz R0, short_delay_loop
+	
+	pop	0					; restore value of R0 to value before DELAY was called
+ret
+
+MED_DELAY:
+	push 0
+	push 1
+
+	mov R0, #08h					; load R0 for 8 counts
+	mov R1, #0FFh					; load R1 for 255 counts		
+
+	med_delay_loop:
+		djnz R1, med_delay_loop		; decrement count in R1
+	mov R1, #0FFh					; reload R1 in case loop is needed again
+	
+	djnz R0, med_delay_loop			; count R1 down again until R0 counts down
+
+	pop 1
+	pop 0
+ret
+
+LONG_DELAY:
+	push 0
+	push 1
+
+	mov R0, #0FFh						; load R0 for 255 counts
+	mov R1, #0FFh						; load R1 for 255 counts		
+
+	long_delay_loop:
+		djnz R1, long_delay_loop		; decrement count in R1
+	mov R1, #0FFh						; reload R1 in case loop is needed again
+	
+	djnz R0, long_delay_loop			; count R1 down again until R0 counts down
+
+	pop 1
+	pop 0
+ret
 
 end
