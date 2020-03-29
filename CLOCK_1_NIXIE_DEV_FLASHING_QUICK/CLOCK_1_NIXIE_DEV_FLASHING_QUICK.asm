@@ -1289,6 +1289,7 @@ DECA_TRANSITION:
 
 	mov DECATRON, #00h 								; start with DECATRON=0
 	lcall MED_DELAY 								; delay
+
 	deca_transition_loop:
 		mov a, SECONDS 								; move seconds into the accumulator
 		cjne a, DECATRON, deca_transition_cont0
@@ -1297,6 +1298,15 @@ DECA_TRANSITION:
 		; if SECONDS (a) != DECATRON:
 		lcall MED_DELAY  							; delay 
 		inc DECATRON 								; increment the DECATRON
+		mov a, #01h
+		cjne a, DECATRON, deca_transition_loop
+			lcall DECA_RESET
+			lcall SHORT_DELAY
+			lcall DECA_RESET
+			lcall SHORT_DELAY
+			lcall DECA_RESET
+			lcall SHORT_DELAY
+
 	ljmp deca_transition_loop 						; loop
 	deca_transition_cont1:
 
