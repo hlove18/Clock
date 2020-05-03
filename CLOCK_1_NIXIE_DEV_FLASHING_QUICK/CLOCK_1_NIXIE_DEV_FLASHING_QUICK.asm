@@ -48,9 +48,15 @@ INIT:
 	; State Space:
 	.equ SHOW_TIME_STATE, 7Eh
 	.equ SET_TIME_STATE,  7Dh
+	.equ SHOW_ALARM_STATE, 7Ch
+	
+	.equ NEXT_CLOCK_STATE, 7Bh
+	.equ TIMEOUT, 7Ah
 
 	mov SHOW_TIME_STATE, #01h
 	mov SET_TIME_STATE,  #02h
+	mov SHOW_ALARM_STATE, #03h
+	mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
 
 	; !!!NOTE: THIS IS DIFFERENT THAN YOU WOULD EXPECT: MOV iram_addr1,iram_addr2 MOVES CONTENTS OF iram_addr1 INTO iram_addr2!!!
 	; COULD BE WRONG!!:
@@ -73,7 +79,7 @@ INIT:
 	.equ GRID2, 	3Ah
 	.equ GRID1, 	3Bh
 	; Fill in with values
-	mov GRID9, #0Ah
+	mov GRID9, #0FFh
 	mov GRID8, #00h
 	mov GRID7, #01h
 	mov GRID6, #0Ah
@@ -184,7 +190,7 @@ INIT:
 	mov YEAR, 	#13h
 	; ============================
 
-	; ====== FLASH Variables ======
+	; ====== Flash Variables ======
 	.equ VFD_FLASH_MASK,	57h
 	.equ NIX_FLASH_MASK,	58h
 
@@ -192,11 +198,20 @@ INIT:
 	.equ NIX_MASK, 			5Ah
 
 	; Initialize flash masks
-	mov VFD_FLASH_MASK, 00h
-	mov NIX_FLASH_MASK, 0Fh
+	mov VFD_FLASH_MASK, 00h  	;FIX?? does this need "#"
+	mov NIX_FLASH_MASK, 0Fh  	;FIX?? does this need "#"
 
 	mov VFD_MASK, #0FFh
 	mov NIX_MASK, #0FFh
+	; ============================
+
+	; ====== Alarm Variables ======
+	.equ ALARM_HOURS,	5Bh
+	.equ ALARM_MINUTES,	5Ch
+
+	; Initialize alarm
+	mov ALARM_HOURS, #00h
+	mov ALARM_MINUTES, #05h
 	; ============================
 
 	; Clear the carry flag
@@ -265,6 +280,10 @@ MAIN:
 		ljmp SET_TIME
 	main_cont1:
 
+	cjne a, SHOW_ALARM_STATE, main_cont2
+		ljmp SHOW_ALARM
+	main_cont2:
+
 	sjmp MAIN
 
 
@@ -290,6 +309,8 @@ SHOW_TIME:
 	mov YY_TENS, a
 	mov YY_ONES, b
 
+	; Update the hours if 12/24 hour switch is flipped
+	mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 	lcall TWLV_TWFR_HOUR_ADJ
 
 	; Split the hours
@@ -324,27 +345,70 @@ SHOW_TIME:
 
 	mov DECATRON, SECONDS
 
-	jb P3.6, cont14					; check if rotary encoder button is pressed
-		mov R2, #0FFh					; load R2 for 255 counts
-		mov R3, #0FFh					; load R3 for 255 counts
-		loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed (also acts as debounce)
-			jb P3.6, cont14			; check if rotary encoder button is still pressed
-			djnz R3, loop3				; decrement count in R3
-		mov R3, #0FFh					; reload R3 in case loop is needed again
-		djnz R2, loop3					; count R3 down again until R2 counts down
-		setb BUTTON_FLAG				; set the rotary encoder button flag
-		;mov GRID9, #00Bh
-		clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
-		clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
-		setb EX0						; enable external interrupt 0
+	; jb P3.6, cont14					; check if rotary encoder button is pressed
+	; 	mov R2, #0FFh					; load R2 for 255 counts
+	; 	mov R3, #0FFh					; load R3 for 255 counts
+	; 	loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed (also acts as debounce)
+	; 		jb P3.6, cont14				; check if rotary encoder button is still pressed
+	; 		djnz R3, loop3				; decrement count in R3
+	; 	mov R3, #0FFh					; reload R3 in case loop is needed again
+	; 	djnz R2, loop3					; count R3 down again until R2 counts down
+	; 	setb BUTTON_FLAG				; set the rotary encoder button flag
+	; 	;mov GRID9, #00Bh
+	; 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
+	; 	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
+	; 	setb EX0						; enable external interrupt 0
 
-		;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
+	; 	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
 		
-		setb EX1						; enable external interrupt 1
-		; setb IT0						; make interrupt triggered on falling edge
-		; setb IT1						; make interrupt triggered on falling edge
-		mov CLOCK_STATE, SET_TIME_STATE	; change state to SET_TIME_STATE
+	; 	setb EX1						; enable external interrupt 1
+	; 	; setb IT0						; make interrupt triggered on falling edge
+	; 	; setb IT1						; make interrupt triggered on falling edge
+	; 	;mov CLOCK_STATE, SET_TIME_STATE	; change state to SET_TIME_STATE
+	; 	mov CLOCK_STATE, SHOW_ALARM_STATE	; change state to SET_TIME_STATE
+	; cont14:
+
+
+
+	
+	jnb P3.6, cont14					; check if rotary encoder is still pressed
+		clr BUTTON_FLAG						; if not, clear the encoder button flag
 	cont14:
+
+	mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
+	jb BUTTON_FLAG, cont15			; check to make sure BUTTON_FLAG is cleared
+		jb P3.6, cont15					; check if rotary encoder button is pressed
+			mov R2, #0FFh					; load R2 for 255 counts
+			mov R3, #0FFh					; load R3 for 255 counts
+			loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed (also acts as debounce)
+				jb P3.6, cont15			; check if rotary encoder button is still pressed
+				djnz R3, loop3				; decrement count in R3
+			mov R3, #0FFh					; reload R3 in case loop is needed again
+			cjne R2, #0C8h, cont16								; check if R2 has been decrement enough for a "short press"
+				; Calculate timeout (10 seconds)
+				mov a, SECONDS 		; move SECONDS into acc 
+				mov b, #3Ch 		; move 60 (dec) into b
+				add a, #0Ah 		; add 10 (dec) to the acc
+				div ab 				; divide a by b
+				mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+				mov NEXT_CLOCK_STATE, SHOW_ALARM_STATE			; next state = SHOW_ALARM_STATE
+			cont16:
+			djnz R2, loop3					; count R3 down again until R2 counts down
+			mov NEXT_CLOCK_STATE, SET_TIME_STATE				; next state = SET_TIME_STATE
+			setb BUTTON_FLAG				; set the rotary encoder button flag
+			;mov GRID9, #00Bh
+			clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
+			clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
+			setb EX0						; enable external interrupt 0
+
+			;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
+			
+			setb EX1						; enable external interrupt 1
+			; setb IT0						; make interrupt triggered on falling edge
+			; setb IT1						; make interrupt triggered on falling edge
+			;mov CLOCK_STATE, SET_TIME_STATE	; change state to SET_TIME_STATE
+	cont15:
+	mov CLOCK_STATE, NEXT_CLOCK_STATE	; change state to NEXT_CLOCK_STATE (SET_TIME_STATE or SHOW_ALARM_STATE)
 
 ljmp MAIN
 
@@ -413,6 +477,7 @@ SET_TIME:
 		mov GRID7, MM_ONES
 
 		; Update the hours if 12/24 hour switch is flipped
+		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 		lcall TWLV_TWFR_HOUR_ADJ
 
 		sjmp set_mm_loop1
@@ -533,6 +598,7 @@ SET_TIME:
 		mov GRID4, DD_ONES
 
 		; Update the hours if 12/24 hour switch is flipped
+		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 		lcall TWLV_TWFR_HOUR_ADJ
 
 		ljmp set_dd_loop1
@@ -607,6 +673,7 @@ SET_TIME:
 		mov GRID1, YY_ONES
 
 		; Update the hours if 12/24 hour switch is flipped
+		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 		lcall TWLV_TWFR_HOUR_ADJ
 
 		ljmp set_yy_loop1
@@ -649,6 +716,7 @@ SET_TIME:
 				ljmp SET_MIN					; jump to SET_MIN
 		set_hr_cont3:
 
+		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 		lcall TWLV_TWFR_HOUR_ADJ
 
 		; Operations to dispay HOURS register in decimal format: HR
@@ -711,6 +779,7 @@ SET_TIME:
 		mov NIX1, MIN_ONES
 
 		; Update the hours if 12/24 hour switch is flipped
+		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 		lcall TWLV_TWFR_HOUR_ADJ
 
 		sjmp set_min_loop1
@@ -726,7 +795,7 @@ SET_TIME:
 		;clr P0.4
 
 
-		mov SECONDS, #1Eh 						; set seconds back to 0
+		mov SECONDS, #00h 						; set seconds back to 0
 		;mov DECATRON, SECONDS 					; move the seconds back into decatron
 		; mov DECA_STATE, #02h
 		; mov R4, #01h
@@ -744,6 +813,48 @@ SET_TIME:
 	; Change the clock state
 	mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
 	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, OR FLAHING WILL CONTINUE IN DECA_TRANSITION)
+
+ljmp MAIN
+
+SHOW_ALARM:
+
+	 ; Update the hours if 12/24 hour switch is flipped
+	mov R1, #5Bh 		; move the address of ALARM_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
+
+	; Split the minutes
+	mov a, ALARM_MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	;mov NIX4, HR_TENS --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	;mov NIX3, HR_ONES --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	mov DECATRON, SECONDS
+
+	; Have VFD display "ALarnn"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #0FFh	; BLANK
+	mov GRID7, #0FFh	; BLANK
+	mov GRID6, #0Ch 	; "A"
+	mov GRID5, #0Dh 	; "L"
+	mov GRID4, #0Eh 	; "a"
+	mov GRID3, #0Fh 	; "r"		
+	mov GRID2, #011h 	; "n"
+	mov GRID1, #011h 	; "n"
+
+	; Check for timeout event
+	mov a, SECONDS
+	cjne a, TIMEOUT, show_alarm_cont0
+		; Transition back to SHOW_TIME_STATE
+		mov GRID6, #0Ah 	; write dash to grid 6 for date
+		mov GRID3, #0Ah 	; write dash to grid 3 for date
+		mov CLOCK_STATE, SHOW_TIME_STATE
+	show_alarm_cont0:
 
 ljmp MAIN
 
@@ -842,7 +953,6 @@ FLASH_DISPLAYS:
 ret
 
 
-
 UPDATE_NIX:
 	; This function sequentially cycles through each nixie bulb and applies the appropriate
 	; signal to display the correct number (illuminate the correct cathode) for each bulb.
@@ -911,6 +1021,12 @@ UPDATE_VFD:
 	; | a | b | c | d | e | f | g | dp |
 	; A VFD_NUM (@R1) value of #0Ah corresponds to a "-" for grids 1-9
 	; A VFD_NUM (@R1) value of #0Bh corresponds to a "*" for grid 9
+	; A VFD_NUM (@R1) value of #0Ch corresponds to a "A" for grids 1-9
+	; A VFD_NUM (@R1) value of #0Dh corresponds to a "L" for grids 1-9
+	; A VFD_NUM (@R1) value of #0Eh corresponds to a "a" for grids 1-9
+	; A VFD_NUM (@R1) value of #0Fh corresponds to a "r" for grids 1-9
+	; A VFD_NUM (@R1) value of #10h bugs out (flickers "-" in grid 9)
+	; A VFD_NUM (@R1) value of #11h corresponds to a "n" for grids 1-9
 
 	push 1							; push R1 onto the stack to preserve its value
 	push acc						; push a onto the stack to preserve its value
@@ -1024,6 +1140,42 @@ UPDATE_VFD:
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
 	vfd_cont12:
+
+	; "A" numeral
+	cjne @R1, #0Ch, vfd_cont13
+		mov SBUF, #0EEh				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont13:
+
+	; "L" numeral
+	cjne @R1, #0Dh, vfd_cont14
+		mov SBUF, #1Ch				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont14:
+
+	; "a" numeral
+	cjne @R1, #0Eh, vfd_cont15
+		mov SBUF, #0FAh				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont15:
+
+	; "r" numeral
+	cjne @R1, #0Fh, vfd_cont16
+		mov SBUF, #0Ah				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont16:
+
+	; "n" numeral
+	cjne @R1, #11h, vfd_cont17
+		mov SBUF, #2Ah				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont17:
+
 	
 	setb P3.5						; load the MAX6921
 	clr P3.5						; latch the MAX6921
@@ -1036,9 +1188,9 @@ UPDATE_VFD:
 	rlc a 								; rotate the acculator left through carry (NOTE! the carry flag gest rotated into bit 0)
 	mov GRID_EN_2, a 					; move the rotated result back into GRID_EN_2
 	clr c 								; clear the carry flag
-	cjne R1, #3Ch, vfd_cont13 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
+	cjne R1, #3Ch, vfd_cont18 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
 		lcall VFD_RESET					; reset the VFD cycle
-	vfd_cont13:
+	vfd_cont18:
 
 	pop PSW
 	pop acc					; restore value of a to value before UPDATE_VFD was called
@@ -1422,7 +1574,8 @@ TWLV_TWFR_HOUR_ADJ:
 	push PSW
 	push b
 
-	mov a, HOURS
+	;mov a, HOURS
+	mov a, @R1 									; move @R1 (i.e. HOURS, or ALARM_HOURS, etc.)
 	jnb P0.6, twlv_twfr_hour_adj_cont1	 		; check if 12 or 24 hour time
 
 	; Handle the 12-hour mode case
@@ -1440,7 +1593,8 @@ TWLV_TWFR_HOUR_ADJ:
 		sjmp twlv_twfr_hour_adj_cont3
 
 	twlv_twfr_hour_adj_cont2:
-	mov a, HOURS
+	;mov a, HOURS
+	mov a, @R1
 
 	twlv_twfr_hour_adj_cont1:
 	clr P1.5 									; turn off PM light
