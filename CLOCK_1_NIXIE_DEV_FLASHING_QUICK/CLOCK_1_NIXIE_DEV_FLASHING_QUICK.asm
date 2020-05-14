@@ -52,10 +52,12 @@ INIT:
 	
 	.equ NEXT_CLOCK_STATE, 7Bh
 	.equ TIMEOUT, 7Ah
+	.equ SET_ALARM_STATE, 79h
 
 	mov SHOW_TIME_STATE, #01h
 	mov SET_TIME_STATE,  #02h
 	mov SHOW_ALARM_STATE, #03h
+	mov SET_ALARM_STATE, #04h
 	mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
 
 	; !!!NOTE: THIS IS DIFFERENT THAN YOU WOULD EXPECT: MOV iram_addr1,iram_addr2 MOVES CONTENTS OF iram_addr1 INTO iram_addr2!!!
@@ -139,7 +141,8 @@ INIT:
 	.equ B_FLAG, 			21h.1
 	.equ BUTTON_FLAG, 		21h.2
 	.equ INC_LEAP_YEAR?,	21h.3
-	.equ ROT_FLAG, 			21h.4	
+	.equ ROT_FLAG, 			21h.4
+	.equ TRANSITION_STATE?,	22h.0
 
 	; Fill in with values
 	clr A_FLAG
@@ -147,6 +150,7 @@ INIT:
 	clr BUTTON_FLAG
 	clr INC_LEAP_YEAR?
 	clr ROT_FLAG
+	clr TRANSITION_STATE?
 
 	; Setup for rotary enocder pull-up resistors
 	setb P3.2 						; Set P3.2 high to use internal pull-up resistor
@@ -284,6 +288,10 @@ MAIN:
 		ljmp SHOW_ALARM
 	main_cont2:
 
+	cjne a, SET_ALARM_STATE, main_cont3
+		ljmp SET_ALARM
+	main_cont3:
+
 	sjmp MAIN
 
 
@@ -368,51 +376,60 @@ SHOW_TIME:
 	; 	mov CLOCK_STATE, SHOW_ALARM_STATE	; change state to SET_TIME_STATE
 	; cont14:
 
-
+	; listen for rotary encoder press
+	mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
+	lcall CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS
+	
+	; jnb P3.6, cont14					; check if rotary encoder is still pressed
+	; 	clr BUTTON_FLAG					; if not, clear the encoder button flag
+	; cont14:
 
 	
-	jnb P3.6, cont14					; check if rotary encoder is still pressed
-		clr BUTTON_FLAG						; if not, clear the encoder button flag
-	cont14:
+	; jb BUTTON_FLAG, cont15			; check to make sure BUTTON_FLAG is cleared
+	; 	jb P3.6, cont15					; check if rotary encoder button is pressed
+	; 		mov R2, #0FFh					; load R2 for 255 counts
+	; 		mov R3, #0FFh					; load R3 for 255 counts
+	; 		loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed
+											; (also acts as debounce)
+	; 			jb P3.6, cont15			; check if rotary encoder button is still pressed
+	; 			djnz R3, loop3				; decrement count in R3
+	; 		mov R3, #0FFh					; reload R3 in case loop is needed again
+	; 		cjne R2, #0C8h, cont16								; check if R2 has been decrement enough for a "short press"
+	; 			; Calculate timeout (10 seconds)
+	; 			mov a, SECONDS 		; move SECONDS into acc 
+	; 			mov b, #3Ch 		; move 60 (dec) into b
+	; 			add a, #0Ah 		; add 10 (dec) to the acc
+	; 			div ab 				; divide a by b
+	; 			mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+	; 			mov NEXT_CLOCK_STATE, SHOW_ALARM_STATE			; next state = SHOW_ALARM_STATE
+	; 		cont16:
+	; 		djnz R2, loop3					; count R3 down again until R2 counts down
+	; 		mov NEXT_CLOCK_STATE, SET_TIME_STATE				; next state = SET_TIME_STATE
+	; 		setb BUTTON_FLAG				; set the rotary encoder button flag
+	; 		;mov GRID9, #00Bh
+	; 		clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
+	; 		clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
+	; 		setb EX0						; enable external interrupt 0
+	; 		;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
+	; 		setb EX1						; enable external interrupt 1
+	; 		; setb IT0						; make interrupt triggered on falling edge
+	; 		; setb IT1						; make interrupt triggered on falling edge
+	; 		;mov CLOCK_STATE, SET_TIME_STATE	; change state to SET_TIME_STATE
+	; cont15:
 
-	mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
-	jb BUTTON_FLAG, cont15			; check to make sure BUTTON_FLAG is cleared
-		jb P3.6, cont15					; check if rotary encoder button is pressed
-			mov R2, #0FFh					; load R2 for 255 counts
-			mov R3, #0FFh					; load R3 for 255 counts
-			loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed (also acts as debounce)
-				jb P3.6, cont15			; check if rotary encoder button is still pressed
-				djnz R3, loop3				; decrement count in R3
-			mov R3, #0FFh					; reload R3 in case loop is needed again
-			cjne R2, #0C8h, cont16								; check if R2 has been decrement enough for a "short press"
-				; Calculate timeout (10 seconds)
-				mov a, SECONDS 		; move SECONDS into acc 
-				mov b, #3Ch 		; move 60 (dec) into b
-				add a, #0Ah 		; add 10 (dec) to the acc
-				div ab 				; divide a by b
-				mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
-				mov NEXT_CLOCK_STATE, SHOW_ALARM_STATE			; next state = SHOW_ALARM_STATE
-			cont16:
-			djnz R2, loop3					; count R3 down again until R2 counts down
-			mov NEXT_CLOCK_STATE, SET_TIME_STATE				; next state = SET_TIME_STATE
-			setb BUTTON_FLAG				; set the rotary encoder button flag
-			;mov GRID9, #00Bh
-			clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
-			clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
-			setb EX0						; enable external interrupt 0
+	; Check the NEXT_CLOCK_STATE
+	mov a, NEXT_CLOCK_STATE
+	cjne a, SHOW_ALARM_STATE, show_time_cont0
+		lcall SHOW_TIME_STATE_TO_SHOW_ALARM_STATE
+	show_time_cont0:
+	cjne a, SET_TIME_STATE, show_time_cont1
+		lcall SHOW_TIME_STATE_TO_SET_TIME_STATE
+	show_time_cont1:
 
-			;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
-			
-			setb EX1						; enable external interrupt 1
-			; setb IT0						; make interrupt triggered on falling edge
-			; setb IT1						; make interrupt triggered on falling edge
-			;mov CLOCK_STATE, SET_TIME_STATE	; change state to SET_TIME_STATE
-	cont15:
-	mov CLOCK_STATE, NEXT_CLOCK_STATE	; change state to NEXT_CLOCK_STATE (SET_TIME_STATE or SHOW_ALARM_STATE)
+	; change state if needed
+	mov CLOCK_STATE, NEXT_CLOCK_STATE	
 
 ljmp MAIN
-
-
 
 
 SET_TIME:
@@ -434,6 +451,9 @@ SET_TIME:
 	; Set the month
 	SET_MM:
 
+		; Clear the TRANSITION_STATE? bit
+		clr TRANSITION_STATE?
+
 		; Move in mask values
 		mov VFD_FLASH_MASK, #0FCh
 		mov NIX_FLASH_MASK, #0FFh
@@ -446,23 +466,22 @@ SET_TIME:
 
 		set_mm_loop1:
 
-		jnb P3.6, set_mm_cont2					; check if rotary encoder is still pressed
-			clr BUTTON_FLAG						; if not, clear the encoder button flag
+		; Check for timeout event
+		mov a, SECONDS
+		cjne a, TIMEOUT, set_mm_cont2
+			; check for valid day, given month
+			lcall DD_ADJ
+			; check for valid year, given month and day
+			lcall YY_ADJ
+			; clear the leap year bit
+			clr INC_LEAP_YEAR?
+			ljmp SET_SECONDS
 		set_mm_cont2:
 
-		jb BUTTON_FLAG, set_mm_cont3			; check to make sure BUTTON_FLAG is cleared
-			jb P3.6, set_mm_cont3				; check if rotary encoder button is pressed
-				mov R2, #28h					; load R2 for 40 counts
-				mov R3, #0FFh					; load R3 for 255 counts
-				set_mm_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
-												; changed (also acts as debounce)
-					jb P3.6, set_mm_cont3		; check if rotary encoder button is still pressed
-					djnz R3, set_mm_loop0		; decrement count in R3
-				mov R3, #0FFh					; reload R3 in case loop is needed again
-				djnz R2, set_mm_loop0			; count R3 down again until R2 counts down
-				setb BUTTON_FLAG				; set the BUTTON_FLAG
-				;mov GRID9, #0Bh
-				ljmp SET_DD						; jump to SET_DD
+		; check for a rotary encoder short press
+		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+		jnb TRANSITION_STATE?, set_mm_cont3
+			ljmp SET_DD 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
 		set_mm_cont3:
 
 		; Operations to dispay MONTH register in decimal format: MM
@@ -485,105 +504,23 @@ SET_TIME:
 	; Set the day
 	SET_DD:
 
+		; Clear the TRANSITION_STATE? bit
+		clr TRANSITION_STATE?
+
 		; Move in mask values
 		mov VFD_FLASH_MASK, #0E7h
 		mov NIX_FLASH_MASK, #0FFh
 
-		; Set the upper and lower bounds
-		mov R2, MONTH
-		mov LOWER_BOUND, #01h 					; days can be 1 min
-
-		January:
-		cjne R2, #01h, February
-			mov UPPER_BOUND, #1Fh 				; days can be 31 max
-			ljmp set_dd_cont0 					; no need to check the day, continue
-
-		February:
-		cjne R2, #02h, March
-			mov UPPER_BOUND, #1Dh 				; days can be 29 max
-			ljmp set_dd_cont1 					; jump to check that the day is legal
-
-		March:
-		cjne R2, #03h, April
-			mov UPPER_BOUND, #1Fh 				; days can be 31 max
-			ljmp set_dd_cont0 					; no need to check the day, continue
-
-		April:
-		cjne R2, #04h, May
-			mov UPPER_BOUND, #1Eh 				; days can be 30 max
-			ljmp set_dd_cont1 					; jump to check that the day is legal
-
-		May:
-		cjne R2, #05h, June
-			mov UPPER_BOUND, #1Fh 				; days can be 31 max
-			ljmp set_dd_cont0 					; no need to check the day, continue
-
-		June:
-		cjne R2, #06h, July
-			mov UPPER_BOUND, #1Eh 				; days can be 30 max
-			ljmp set_dd_cont1 					; jump to check that the day is legal
-
-		July:
-		cjne R2, #07h, August
-			mov UPPER_BOUND, #1Fh 				; days can be 31 max
-			ljmp set_dd_cont0 					; no need to check the day, continue
-
-		August:
-		cjne R2, #08h, September
-			mov UPPER_BOUND, #1Fh 				; days can be 31 max
-			ljmp set_dd_cont0 					; no need to check the day, continue
-
-		September:
-		cjne R2, #09h, October
-			mov UPPER_BOUND, #1Eh 				; days can be 30 max
-			ljmp set_dd_cont1 					; jump to check that the day is legal
-
-		October:
-		cjne R2, #0Ah, November
-			mov UPPER_BOUND, #1Fh 				; days can be 31 max
-			ljmp set_dd_cont0 					; no need to check the day, continue
-
-		November:
-		cjne R2, #0Bh, December
-			mov UPPER_BOUND, #1Eh 				; days can be 30 max
-			ljmp set_dd_cont1 					; jump to check that the day is legal
-
-		December:
-		mov UPPER_BOUND, #1Fh 					; days can be 31 max
-		ljmp set_dd_cont0 						; no need to check the day, continue
-
-		set_dd_cont1:
-		; check if DAY is greater than UPPER_BOUND
-		mov a, UPPER_BOUND 						; move UPPER_BOUND into accumulator
-		clr c 									; clear the accumulator
-		subb a, DAY 							; subtract a - DAY
-		jnc set_dd_cont0 						; jump to end if carry is not set
-			; if DAY is greater than UPPER_BOUND:
-			mov DAY, UPPER_BOUND 				; set the day to the max value
-
-		set_dd_cont0:
+		lcall DD_ADJ
 
 		mov R0, #4Dh							; corresponds to memory address of DAY
 
 		set_dd_loop1:
 
-		jnb P3.6, set_dd_cont2					; check if rotary encoder is still pressed
-			clr BUTTON_FLAG						; if not, clear the encoder button flag
-		set_dd_cont2:
-
-		jb BUTTON_FLAG, set_dd_cont3			; check to make sure BUTTON_FLAG is cleared
-			jb P3.6, set_dd_cont3				; check if rotary encoder button is pressed
-				mov R2, #28h					; load R2 for 40 counts
-				mov R3, #0FFh					; load R3 for 255 counts
-				set_dd_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
-												; changed (also acts as debounce)
-					jb P3.6, set_dd_cont3		; check if rotary encoder button is still pressed
-					djnz R3, set_dd_loop0		; decrement count in R3
-				mov R3, #0FFh					; reload R3 in case loop is needed again
-				djnz R2, set_dd_loop0			; count R3 down again until R2 counts down
-				setb BUTTON_FLAG				; set the BUTTON_FLAG
-				;mov GRID9, #0FFh
-				ljmp SET_YY						; jump to SET_YY
+		; check for a rotary encoder short press
+		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+		jnb TRANSITION_STATE?, set_dd_cont3
+			ljmp SET_YY 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
 		set_dd_cont3:
 
 		; Operations to dispay DAY register in decimal format: DD
@@ -608,57 +545,23 @@ SET_TIME:
 	; Set the year
 	SET_YY:
 
+		; Clear the TRANSITION_STATE? bit
+		clr TRANSITION_STATE?
+
 		; Move in mask values
 		mov VFD_FLASH_MASK, #3Fh
 		mov NIX_FLASH_MASK, #0FFh
 
-		; Set the upper and lower bounds
-		mov LOWER_BOUND, #00h 					; years can be 00 min
-		mov UPPER_BOUND, #63h					; years can be 99 max
-
-		; check for leap day condition
-		mov R2, MONTH
-
-		cjne R2, #02h, set_yy_cont0				; if the month is february
-			mov R2, DAY 						; move DAY into R2
-			cjne R2, #1Dh, set_yy_cont0			; and if the day is the 29th 
-				setb INC_LEAP_YEAR?				; set the INC_LEAP_YEAR? flag
-				mov UPPER_BOUND, #60h 			; move 96 into UPPER_BOUND for leap day condition (don't want rollover to be 99)
-				; adjust the year if it's not a multiple of 4
-				mov a, YEAR 					; move the YEAR into the accumulator
-				mov b, #04h						; move 4 into b
-				div ab							; divide: a/b with the quotient in a and remainder in b
-				mov a, b 						; move b into accumulator
-				; decrement the YEAR until it is a multiple of 4
-				set_yy_loop2:
-				jz set_yy_cont0					; jump to set_yy_cont0 if the accumulator is zero (valid leap year)
-					dec YEAR 					; decrement the YEAR
-					dec a 						; decrement the accumulator
-					sjmp set_yy_loop2 			; loop
-
-		set_yy_cont0:
+		lcall YY_ADJ
 
 		mov R0, #4Eh							; corresponds to memory address of YEAR
 
 		set_yy_loop1:
 
-		jnb P3.6, set_yy_cont2					; check if rotary encoder is still pressed
-			clr BUTTON_FLAG						; if not, clear the encoder button flag
-		set_yy_cont2:
-
-		jb BUTTON_FLAG, set_yy_cont3			; check to make sure BUTTON_FLAG is cleared
-			jb P3.6, set_yy_cont3				; check if rotary encoder button is pressed
-				mov R2, #28h					; load R2 for 40 counts
-				mov R3, #0FFh					; load R3 for 255 counts
-				set_yy_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
-												; changed (also acts as debounce)
-					jb P3.6, set_yy_cont3		; check if rotary encoder button is still pressed
-					djnz R3, set_yy_loop0		; decrement count in R3
-				mov R3, #0FFh					; reload R3 in case loop is needed again
-				djnz R2, set_yy_loop0			; count R3 down again until R2 counts down
-				setb BUTTON_FLAG				; set the BUTTON_FLAG
-				;mov GRID9, #0FFh
-				ljmp SET_HR						; jump to SET_HR
+		; check for a rotary encoder short press
+		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+		jnb TRANSITION_STATE?, set_yy_cont3
+			ljmp SET_HR 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
 		set_yy_cont3:
 
 		; Operations to dispay YEAR register in decimal format: YY
@@ -682,6 +585,9 @@ SET_TIME:
 	; Set the hours
 	SET_HR:
 
+		; Clear the TRANSITION_STATE? bit
+		clr TRANSITION_STATE?
+
 		; Move in mask values
 		mov VFD_FLASH_MASK, #0FFh
 		mov NIX_FLASH_MASK, #0CFh
@@ -697,23 +603,10 @@ SET_TIME:
 
 		set_hr_loop1:
 
-		jnb P3.6, set_hr_cont2					; check if rotary encoder is still pressed
-			clr BUTTON_FLAG						; if not, clear the encoder button flag
-		set_hr_cont2:
-
-		jb BUTTON_FLAG, set_hr_cont3			; check to make sure BUTTON_FLAG is cleared
-			jb P3.6, set_hr_cont3				; check if rotary encoder button is pressed
-				mov R2, #28h					; load R2 for 40 counts
-				mov R3, #0FFh					; load R3 for 255 counts
-				set_hr_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
-												; changed (also acts as debounce)
-					jb P3.6, set_hr_cont3		; check if rotary encoder button is still pressed
-					djnz R3, set_hr_loop0		; decrement count in R3
-				mov R3, #0FFh					; reload R3 in case loop is needed again
-				djnz R2, set_hr_loop0			; count R3 down again until R2 counts down
-				setb BUTTON_FLAG				; set the BUTTON_FLAG
-				;mov GRID9, #0Bh
-				ljmp SET_MIN					; jump to SET_MIN
+		; check for a rotary encoder short press
+		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+		jnb TRANSITION_STATE?, set_hr_cont3
+			ljmp SET_MIN 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
 		set_hr_cont3:
 
 		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
@@ -736,6 +629,9 @@ SET_TIME:
 	; Set the minutes
 	SET_MIN:
 
+		; Clear the TRANSITION_STATE? bit
+		clr TRANSITION_STATE?
+
 		; Move in mask values
 		mov VFD_FLASH_MASK, #0FFh
 		mov NIX_FLASH_MASK, #3Fh
@@ -748,23 +644,10 @@ SET_TIME:
 
 		set_min_loop1:
 
-		jnb P3.6, set_min_cont2					; check if rotary encoder is still pressed
-			clr BUTTON_FLAG						; if not, clear the encoder button flag
-		set_min_cont2:
-
-		jb BUTTON_FLAG, set_min_cont3			; check to make sure BUTTON_FLAG is cleared
-			jb P3.6, set_min_cont3				; check if rotary encoder button is pressed
-				mov R2, #28h					; load R2 for 40 counts
-				mov R3, #0FFh					; load R3 for 255 counts
-				set_min_loop0:					; rotary encoder button must be depressed for ~20ms before time/date can be
-												; changed (also acts as debounce)
-					jb P3.6, set_min_cont3		; check if rotary encoder button is still pressed
-					djnz R3, set_min_loop0		; decrement count in R3
-				mov R3, #0FFh					; reload R3 in case loop is needed again
-				djnz R2, set_min_loop0			; count R3 down again until R2 counts down
-				setb BUTTON_FLAG				; set the BUTTON_FLAG
-				;mov GRID9, #0Bh
-				ljmp SET_SECONDS				; jump to SET_SECONDS
+		; check for a rotary encoder short press
+		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+		jnb TRANSITION_STATE?, set_min_cont3
+			ljmp SET_SECONDS					; if there was a short press (TRANSITION_STATE? bit is set), go to next state
 		set_min_cont3:
 
 		; Operations to dispay MINUTES register in decimal format: MIN
@@ -787,13 +670,16 @@ SET_TIME:
 
 	; Set the seconds (defaults to zeroing the seconds)
 	SET_SECONDS:
+
+		; Clear the TRANSITION_STATE? bit
+		clr TRANSITION_STATE?
+
 		; mov SECONDS, #00h 						; set seconds back to 0
 		; mov DECATRON, SECONDS 					; move the seconds back into decatron
 
 		; WORKED THE BEST BUT IMMEDIATELY INCREMENTS MINUTES
 		;mov SECONDS, #3Bh 						; set seconds back to 0
 		;clr P0.4
-
 
 		mov SECONDS, #00h 						; set seconds back to 0
 		;mov DECATRON, SECONDS 					; move the seconds back into decatron
@@ -812,13 +698,14 @@ SET_TIME:
 
 	; Change the clock state
 	mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
-	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, OR FLAHING WILL CONTINUE IN DECA_TRANSITION)
+	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
+	         									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
 
 ljmp MAIN
 
 SHOW_ALARM:
 
-	 ; Update the hours if 12/24 hour switch is flipped
+	; Update the hours if 12/24 hour switch is flipped
 	mov R1, #5Bh 		; move the address of ALARM_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 	lcall TWLV_TWFR_HOUR_ADJ
 
@@ -836,25 +723,32 @@ SHOW_ALARM:
 
 	mov DECATRON, SECONDS
 
-	; Have VFD display "ALarnn"
-	mov GRID9, #0FFh    ; BLANK
-	mov GRID8, #0FFh	; BLANK
-	mov GRID7, #0FFh	; BLANK
-	mov GRID6, #0Ch 	; "A"
-	mov GRID5, #0Dh 	; "L"
-	mov GRID4, #0Eh 	; "a"
-	mov GRID3, #0Fh 	; "r"		
-	mov GRID2, #011h 	; "n"
-	mov GRID1, #011h 	; "n"
+	; listen for rotary encoder press
+	mov NEXT_CLOCK_STATE, SHOW_ALARM_STATE
+	lcall CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS
+
+	; Check the NEXT_CLOCK_STATE
+	mov a, NEXT_CLOCK_STATE
+	cjne a, SHOW_TIME_STATE, show_alarm_cont0
+		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE
+	show_alarm_cont0:
+	cjne a, SET_ALARM_STATE, show_alarm_cont1
+		lcall SHOW_ALARM_STATE_TO_SET_ALARM_STATE
+	show_alarm_cont1:
 
 	; Check for timeout event
 	mov a, SECONDS
-	cjne a, TIMEOUT, show_alarm_cont0
-		; Transition back to SHOW_TIME_STATE
-		mov GRID6, #0Ah 	; write dash to grid 6 for date
-		mov GRID3, #0Ah 	; write dash to grid 3 for date
-		mov CLOCK_STATE, SHOW_TIME_STATE
-	show_alarm_cont0:
+	cjne a, TIMEOUT, show_alarm_cont2
+		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE
+		mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
+	show_alarm_cont2:
+
+	; change state if needed
+	mov CLOCK_STATE, NEXT_CLOCK_STATE
+
+ljmp MAIN
+
+SET_ALARM:
 
 ljmp MAIN
 
@@ -908,7 +802,128 @@ TIMER_0_SERVICE:
 	pop acc
 ret 			 			; exit
 
+; ====== State Transition Functions ======
+CHECK_FOR_ROT_ENC_SHORT_PRESS:
+	; This function is used to transisiton between sub-states, such as SET_MM, SET_DD, etc. in SET_TIME_STATE
+	jnb P3.6, check_short_press_cont0				; check if rotary encoder is still pressed
+		clr BUTTON_FLAG								; if not, clear the encoder button flag
+	check_short_press_cont0:
 
+	jb BUTTON_FLAG, check_short_press_cont1			; check to make sure BUTTON_FLAG is cleared
+		jb P3.6, check_short_press_cont1			; check if rotary encoder button is pressed
+			mov R2, #28h							; load R2 for 40 counts
+			mov R3, #0FFh							; load R3 for 255 counts
+			check_short_press_loop0:				; rotary encoder button must be depressed for ~20ms before time/date can be
+													; changed (also acts as debounce)
+				jb P3.6, check_short_press_cont1	; check if rotary encoder button is still pressed
+				djnz R3, check_short_press_loop0	; decrement count in R3
+			mov R3, #0FFh							; reload R3 in case loop is needed again
+			djnz R2, check_short_press_loop0		; count R3 down again until R2 counts down
+			setb BUTTON_FLAG						; set the BUTTON_FLAG
+			setb TRANSITION_STATE?					; set the TRANSITION_STATE? bit
+	check_short_press_cont1:
+ret
+
+
+CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
+	; This function is used to transisiton between states, such as SET_TIME_STATE, SHOW_ALARM_STATE, etc.
+	; This function listens for a rotary encoder short or long button press and determines which state to go to next based on the current CLOCK_STATE
+
+	jnb P3.6, cont14					; check if rotary encoder is still pressed
+		clr BUTTON_FLAG					; if not, clear the encoder button flag
+	cont14:
+
+	mov a, CLOCK_STATE 					; move the CLOCK_STATE into the accumulator
+
+	jb BUTTON_FLAG, cont15			; check to make sure BUTTON_FLAG is cleared
+		jb P3.6, cont15					; check if rotary encoder button is pressed
+			mov R2, #0FFh					; load R2 for 255 counts
+			mov R3, #0FFh					; load R3 for 255 counts
+			loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed (also acts as debounce)
+				jb P3.6, cont15			; check if rotary encoder button is still pressed
+				djnz R3, loop3				; decrement count in R3
+			mov R3, #0FFh					; reload R3 in case loop is needed again
+			cjne R2, #0E1h, cont16								; check if R2 has been decrement enough for a "short press"
+				; if there has been a rot enc short press, determine next state based on current state
+				cjne a, SHOW_TIME_STATE, cont17
+					; if CLOCK_STATE = SHOW_TIME_STATE:
+					;lcall SHOW_TIME_STATE_TO_SHOW_ALARM_STATE
+					mov NEXT_CLOCK_STATE, SHOW_ALARM_STATE
+					ljmp cont16
+				cont17:
+				; only other possibility is that we are in SHOW_ALARM_STATE
+				;lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE
+				mov NEXT_CLOCK_STATE, SHOW_TIME_STATE		
+			cont16:
+			djnz R2, loop3					; count R3 down again until R2 counts down
+			; if there has been a rot enc long press, determine next state based on current state
+			cjne a, SHOW_TIME_STATE, cont18 
+				;if CLOCK_STATE = SHOW_TIME_STATE
+				;lcall SHOW_TIME_STATE_TO_SET_TIME_STATE
+				mov NEXT_CLOCK_STATE, SET_TIME_STATE
+				ljmp cont19
+			cont18:
+			; only other possibility is that we are in SHOW_ALARM_STATE
+			;lcall SHOW_ALARM_STATE_TO_SET_ALARM_STATE
+			mov NEXT_CLOCK_STATE, SET_ALARM_STATE
+			cont19:
+			setb BUTTON_FLAG				; set the rotary encoder button flag
+	cont15:
+ret
+
+SHOW_TIME_STATE_TO_SHOW_ALARM_STATE:
+	; set timeout (10 seconds)
+	mov a, SECONDS 		; move SECONDS into acc 
+	mov b, #3Ch 		; move 60 (dec) into b
+	add a, #0Ah 		; add 10 (dec) to the acc
+	div ab 				; divide a by b
+	mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+
+	; Have VFD display "ALarnn"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #0FFh	; BLANK
+	mov GRID7, #0FFh	; BLANK
+	mov GRID6, #0Ch 	; "A"
+	mov GRID5, #0Dh 	; "L"
+	mov GRID4, #0Eh 	; "a"
+	mov GRID3, #0Fh 	; "r"		
+	mov GRID2, #011h 	; "n"
+	mov GRID1, #011h 	; "n"
+ret
+
+SHOW_TIME_STATE_TO_SET_TIME_STATE:
+	; set timeout (59 seconds)
+	mov a, SECONDS 		; move SECONDS into acc 
+	mov b, #3Ch 		; move 60 (dec) into b
+	add a, #3Bh 		; add 59 (dec) to the acc
+	div ab 				; divide a by b
+	mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+
+	; initalize external interrupts for rotary encoder
+	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
+	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
+	setb EX0						; enable external interrupt 0
+	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
+	setb EX1						; enable external interrupt 1
+ret
+
+SHOW_ALARM_STATE_TO_SET_ALARM_STATE:
+	; initalize external interrupts for rotary encoder
+	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
+	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
+	setb EX0						; enable external interrupt 0
+	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
+	setb EX1						; enable external interrupt 1
+ret
+
+SHOW_ALARM_STATE_TO_SHOW_TIME_STATE:
+	; Display "-" in grids 3 & 6
+	mov GRID6, #0Ah 	; write dash to grid 6 for date
+	mov GRID3, #0Ah 	; write dash to grid 3 for date
+ret
+; ========================================
+
+; ====== Display Functions ======
 UPDATE_DISPLAYS:
 	lcall UPDATE_DECA					; update the decatron
 	lcall UPDATE_VFD					; update the VFD
@@ -997,7 +1012,6 @@ UPDATE_NIX:
 	pop PSW
 	pop acc
 	pop 1
-
 ret
 
 
@@ -1005,7 +1019,6 @@ NIX_RESET:
 	; This function resets the nixie registers after a complete cycle
 	mov NIX_EN, #10h			; initialize nixie enable nibble
 	mov NIX_INDX, #3Eh 			; initalize nixie index (start with nixie 4). This should reflect the memory location of NIX4.
-
 ret
 
 
@@ -1195,7 +1208,6 @@ UPDATE_VFD:
 	pop PSW
 	pop acc					; restore value of a to value before UPDATE_VFD was called
 	pop 1					; restore value of R1 to value before UPDATE_VFD was called
-
 ret
 
 
@@ -1206,7 +1218,6 @@ VFD_RESET:
 	mov GRID_EN_1, #80h
 	mov GRID_EN_2, #00h
 	mov GRID_INDX, #33h 	; corresponds to memory location of GRID9
-
 ret
 
 
@@ -1319,7 +1330,6 @@ UPDATE_DECA:
 	pop acc
 	; pop 4
 	pop 3
-	
 ret
 
 
@@ -1413,7 +1423,6 @@ DECA_TOGGLE:
 	mov DECA_STATE, R3 							; update DECA_STATE
 
 	deca_toggle_cont1:
-
 ret 											; exit
 
 
@@ -1461,8 +1470,8 @@ DECA_TRANSITION:
 
 	ljmp deca_transition_loop 						; loop
 	deca_transition_cont1:
-
 ret
+; ===============================
 
 
 ENC_A:
@@ -1474,9 +1483,9 @@ ENC_A:
 	jnb P3.3, enc_a_cont0
 		setb A_FLAG
 		clr B_FLAG
-		ljmp enc_a_cont1
+		ljmp enc_a_cont2
 	enc_a_cont0:
-	jb A_FLAG, enc_a_cont1
+	jb A_FLAG, enc_a_cont2
 		inc @R0
 		setb ROT_FLAG								; set the rotation flag
 		mov VFD_MASK, #0FFh							; make all displays visible
@@ -1493,20 +1502,20 @@ ENC_A:
 	; clr A_FLAG 									; clear A_FLAG
 	; inc @R0 									; increment the register R0 is pointing to
 
-	; jnb INC_LEAP_YEAR?, enc_a_cont2				; check if INC_LEAP_YEAR? bit is set
-	; 	;if INC_LEAP_YEAR? bit is set, increment @R0 (YEAR) three more times (for a total of 4 times) 
-	; 	inc @R0
-	; 	inc @R0
-	; 	inc @R0
-	; enc_a_cont2:
+	jnb INC_LEAP_YEAR?, enc_a_cont2				; check if INC_LEAP_YEAR? bit is set
+		;if INC_LEAP_YEAR? bit is set, increment @R0 (YEAR) three more times (for a total of 4 times) 
+		inc @R0
+		inc @R0
+		inc @R0
+	enc_a_cont2:
 
 	; check if @R0 is greater than UPPER_BOUND
 	mov a, UPPER_BOUND 							; move UPPER_BOUND into accumulator
 	subb a, @R0 								; subtract a - @R0
-	jnc enc_a_cont2 							; jump to end if carry is not set
+	jnc enc_a_cont3 							; jump to end if carry is not set
 		; if @R0 is greater than UPPER_BOUND:
 		mov @R0, LOWER_BOUND 					; rollover @R0
-	enc_a_cont2:
+	enc_a_cont3:
 
 	; pop the original SFR values back into their place and restore their values
 	pop acc
@@ -1521,9 +1530,9 @@ ENC_B:
 	jnb P3.2, enc_b_cont0
 		setb B_FLAG
 		clr A_FLAG
-		ljmp enc_b_cont1
+		ljmp enc_b_cont2
 	enc_b_cont0:
-	jb B_FLAG, enc_b_cont1
+	jb B_FLAG, enc_b_cont2
 		dec @R0
 		setb ROT_FLAG								; set the rotation flag
 		mov VFD_MASK, #0FFh							; make all displays visible
@@ -1613,7 +1622,112 @@ TWLV_TWFR_HOUR_ADJ:
 	pop b
 	pop PSW
 	pop acc
+ret
 
+DD_ADJ:
+	; This function adjust the day (DD) of the date such that the user cannot input an impossible date (i.e. 2/31/2019)
+	; Set the upper and lower bounds
+	mov R2, MONTH
+	mov LOWER_BOUND, #01h 					; days can be 1 min
+
+	January:
+	cjne R2, #01h, February
+		mov UPPER_BOUND, #1Fh 				; days can be 31 max
+		ljmp set_dd_cont0 					; no need to check the day, continue
+
+	February:
+	cjne R2, #02h, March
+		mov UPPER_BOUND, #1Dh 				; days can be 29 max
+		ljmp set_dd_cont1 					; jump to check that the day is legal
+
+	March:
+	cjne R2, #03h, April
+		mov UPPER_BOUND, #1Fh 				; days can be 31 max
+		ljmp set_dd_cont0 					; no need to check the day, continue
+
+	April:
+	cjne R2, #04h, May
+		mov UPPER_BOUND, #1Eh 				; days can be 30 max
+		ljmp set_dd_cont1 					; jump to check that the day is legal
+
+	May:
+	cjne R2, #05h, June
+		mov UPPER_BOUND, #1Fh 				; days can be 31 max
+		ljmp set_dd_cont0 					; no need to check the day, continue
+
+	June:
+	cjne R2, #06h, July
+		mov UPPER_BOUND, #1Eh 				; days can be 30 max
+		ljmp set_dd_cont1 					; jump to check that the day is legal
+
+	July:
+	cjne R2, #07h, August
+		mov UPPER_BOUND, #1Fh 				; days can be 31 max
+		ljmp set_dd_cont0 					; no need to check the day, continue
+
+	August:
+	cjne R2, #08h, September
+		mov UPPER_BOUND, #1Fh 				; days can be 31 max
+		ljmp set_dd_cont0 					; no need to check the day, continue
+
+	September:
+	cjne R2, #09h, October
+		mov UPPER_BOUND, #1Eh 				; days can be 30 max
+		ljmp set_dd_cont1 					; jump to check that the day is legal
+
+	October:
+	cjne R2, #0Ah, November
+		mov UPPER_BOUND, #1Fh 				; days can be 31 max
+		ljmp set_dd_cont0 					; no need to check the day, continue
+
+	November:
+	cjne R2, #0Bh, December
+		mov UPPER_BOUND, #1Eh 				; days can be 30 max
+		ljmp set_dd_cont1 					; jump to check that the day is legal
+
+	December:
+	mov UPPER_BOUND, #1Fh 					; days can be 31 max
+	ljmp set_dd_cont0 						; no need to check the day, continue
+
+	set_dd_cont1:
+	; check if DAY is greater than UPPER_BOUND
+	mov a, UPPER_BOUND 						; move UPPER_BOUND into accumulator
+	clr c 									; clear the carry bit
+	subb a, DAY 							; subtract a - DAY
+	jnc set_dd_cont0 						; jump to end if carry is not set
+		; if DAY is greater than UPPER_BOUND:
+		mov DAY, UPPER_BOUND 				; set the day to the max value
+	set_dd_cont0:
+ret
+
+YY_ADJ:
+	; This function adjust the day (DD) of the date such that the user cannot input an impossible date (i.e. 2/29/2019)
+	; check for leap day condition
+
+	; Set the upper and lower bounds
+	mov LOWER_BOUND, #00h 					; years can be 00 min
+	mov UPPER_BOUND, #63h					; years can be 99 max
+
+	mov R2, MONTH
+
+	cjne R2, #02h, set_yy_cont0				; if the month is february
+		mov R2, DAY 						; move DAY into R2
+		cjne R2, #1Dh, set_yy_cont0			; and if the day is the 29th 
+			setb INC_LEAP_YEAR?				; set the INC_LEAP_YEAR? flag
+			mov UPPER_BOUND, #60h 			; move 96 into UPPER_BOUND for leap day condition (don't want rollover to be 99)
+			; adjust the year if it's not a multiple of 4
+			mov a, YEAR 					; move the YEAR into the accumulator
+			mov b, #04h						; move 4 into b
+			div ab							; divide: a/b with the quotient in a and remainder in b
+			mov a, b 						; move b into accumulator
+			; decrement the YEAR until it is a multiple of 4
+			set_yy_loop2:
+			jz set_yy_cont0					; jump to set_yy_cont0 if the accumulator is zero (valid leap year)
+				dec YEAR 					; decrement the YEAR
+				dec a 						; decrement the accumulator
+				sjmp set_yy_loop2 			; loop
+
+	set_yy_cont0:
 ret
 
 SHORT_DELAY:
