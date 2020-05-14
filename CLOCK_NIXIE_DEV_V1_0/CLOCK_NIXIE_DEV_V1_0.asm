@@ -63,7 +63,6 @@ INIT:
 	; !!!NOTE: THIS IS DIFFERENT THAN YOU WOULD EXPECT: MOV iram_addr1,iram_addr2 MOVES CONTENTS OF iram_addr1 INTO iram_addr2!!!
 	; COULD BE WRONG!!:
 	mov CLOCK_STATE, SHOW_TIME_STATE	; start in SHOW_TIME_STATE
-	; mov CLOCK_STATE, SET_TIME_STATE		; start in SET_TIME_STATE (for testing SET_TIME function)
 	; =============================
 
 	; ====== VFD Variables ======
@@ -170,7 +169,6 @@ INIT:
 
 	mov HOURS, 		#00h
 	mov MINUTES, 	#00h
-	;mov SECONDS, 	#37h
 	mov SECONDS, 	#00h
 	; ============================
 
@@ -321,13 +319,6 @@ SHOW_TIME:
 	mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 	lcall TWLV_TWFR_HOUR_ADJ
 
-	; Split the hours
-	; mov a, HOURS
-	; mov b, #0Ah
-	; div ab
-	; mov HR_TENS, a
-	; mov HR_ONES, b
-
 	; Split the minutes
 	mov a, MINUTES
 	mov b, #0Ah
@@ -353,69 +344,9 @@ SHOW_TIME:
 
 	mov DECATRON, SECONDS
 
-	; jb P3.6, cont14					; check if rotary encoder button is pressed
-	; 	mov R2, #0FFh					; load R2 for 255 counts
-	; 	mov R3, #0FFh					; load R3 for 255 counts
-	; 	loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed (also acts as debounce)
-	; 		jb P3.6, cont14				; check if rotary encoder button is still pressed
-	; 		djnz R3, loop3				; decrement count in R3
-	; 	mov R3, #0FFh					; reload R3 in case loop is needed again
-	; 	djnz R2, loop3					; count R3 down again until R2 counts down
-	; 	setb BUTTON_FLAG				; set the rotary encoder button flag
-	; 	;mov GRID9, #00Bh
-	; 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
-	; 	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
-	; 	setb EX0						; enable external interrupt 0
-
-	; 	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
-		
-	; 	setb EX1						; enable external interrupt 1
-	; 	; setb IT0						; make interrupt triggered on falling edge
-	; 	; setb IT1						; make interrupt triggered on falling edge
-	; 	;mov CLOCK_STATE, SET_TIME_STATE	; change state to SET_TIME_STATE
-	; 	mov CLOCK_STATE, SHOW_ALARM_STATE	; change state to SET_TIME_STATE
-	; cont14:
-
 	; listen for rotary encoder press
 	mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
 	lcall CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS
-	
-	; jnb P3.6, cont14					; check if rotary encoder is still pressed
-	; 	clr BUTTON_FLAG					; if not, clear the encoder button flag
-	; cont14:
-
-	
-	; jb BUTTON_FLAG, cont15			; check to make sure BUTTON_FLAG is cleared
-	; 	jb P3.6, cont15					; check if rotary encoder button is pressed
-	; 		mov R2, #0FFh					; load R2 for 255 counts
-	; 		mov R3, #0FFh					; load R3 for 255 counts
-	; 		loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed
-											; (also acts as debounce)
-	; 			jb P3.6, cont15			; check if rotary encoder button is still pressed
-	; 			djnz R3, loop3				; decrement count in R3
-	; 		mov R3, #0FFh					; reload R3 in case loop is needed again
-	; 		cjne R2, #0C8h, cont16								; check if R2 has been decrement enough for a "short press"
-	; 			; Calculate timeout (10 seconds)
-	; 			mov a, SECONDS 		; move SECONDS into acc 
-	; 			mov b, #3Ch 		; move 60 (dec) into b
-	; 			add a, #0Ah 		; add 10 (dec) to the acc
-	; 			div ab 				; divide a by b
-	; 			mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
-	; 			mov NEXT_CLOCK_STATE, SHOW_ALARM_STATE			; next state = SHOW_ALARM_STATE
-	; 		cont16:
-	; 		djnz R2, loop3					; count R3 down again until R2 counts down
-	; 		mov NEXT_CLOCK_STATE, SET_TIME_STATE				; next state = SET_TIME_STATE
-	; 		setb BUTTON_FLAG				; set the rotary encoder button flag
-	; 		;mov GRID9, #00Bh
-	; 		clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
-	; 		clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
-	; 		setb EX0						; enable external interrupt 0
-	; 		;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
-	; 		setb EX1						; enable external interrupt 1
-	; 		; setb IT0						; make interrupt triggered on falling edge
-	; 		; setb IT1						; make interrupt triggered on falling edge
-	; 		;mov CLOCK_STATE, SET_TIME_STATE	; change state to SET_TIME_STATE
-	; cont15:
 
 	; Check the NEXT_CLOCK_STATE
 	mov a, NEXT_CLOCK_STATE
@@ -433,20 +364,7 @@ ljmp MAIN
 
 
 SET_TIME:
-	; Disable 60/50Hz timing interrupt
-	; clr ET0										; disable timer 0 overflow interrupt
-	; clr TR0 										; stop timer0
-
-	; clr P0.4										; turn off the decatron
-	; mov DECATRON, #1Eh								; move 30 into decatron (to light up full)
-
 	clr ROT_FLAG									; clear the ROT_FLAG
-
-	; Enable external interrupts for rotary encoder
-	;clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
-	;clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
-	;setb EX0						; enable external interrupt 0
-	;setb EX1						; enable external interrupt 1
 
 	; Set the month
 	SET_MM:
@@ -469,12 +387,9 @@ SET_TIME:
 		; Check for timeout event
 		mov a, SECONDS
 		cjne a, TIMEOUT, set_mm_cont2
-			; check for valid day, given month
-			lcall DD_ADJ
-			; check for valid year, given month and day
-			lcall YY_ADJ
-			; clear the leap year bit
-			clr INC_LEAP_YEAR?
+			lcall DD_ADJ 						; check for valid day, given month
+			lcall YY_ADJ 						; check for valid year, given month and day
+			clr INC_LEAP_YEAR? 					; clear the leap year bit
 			ljmp SET_SECONDS
 		set_mm_cont2:
 
@@ -612,17 +527,6 @@ SET_TIME:
 		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 		lcall TWLV_TWFR_HOUR_ADJ
 
-		; Operations to dispay HOURS register in decimal format: HR
-		; mov a, HOURS
-		; mov b, #0Ah
-		; div ab
-		; mov HR_TENS, a
-		; mov HR_ONES, b
-
-		; ; Display HOURS:
-		; mov NIX4, HR_TENS
-		; mov NIX3, HR_ONES
-
 		sjmp set_hr_loop1
 
 
@@ -674,32 +578,15 @@ SET_TIME:
 		; Clear the TRANSITION_STATE? bit
 		clr TRANSITION_STATE?
 
-		; mov SECONDS, #00h 						; set seconds back to 0
-		; mov DECATRON, SECONDS 					; move the seconds back into decatron
-
-		; WORKED THE BEST BUT IMMEDIATELY INCREMENTS MINUTES
-		;mov SECONDS, #3Bh 						; set seconds back to 0
-		;clr P0.4
-
 		mov SECONDS, #00h 						; set seconds back to 0
-		;mov DECATRON, SECONDS 					; move the seconds back into decatron
-		; mov DECA_STATE, #02h
-		; mov R4, #01h
 
-		;setb P0.4								; turn the decatron back on
+		clr EX0						; disable external interrupt 0
+		clr EX1						; disable external interrupt 1
 
-	; Restart timer 0
-	; setb ET0									; enable timer 0 overflow interrupt
-	; mov TL0, #0C4h 							; initialize TL0 (#C4h for 60Hz, #CEh for 50Hz)
-	; setb TR0 									; start timer0
-
-	clr EX0						; disable external interrupt 0
-	clr EX1						; disable external interrupt 1
-
-	; Change the clock state
-	mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
-	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
-	         									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
+		; Change the clock state
+		mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
+		lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
+		         									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
 
 ljmp MAIN
 
@@ -760,29 +647,6 @@ TIMER_0_SERVICE:
 	push acc
 	push PSW
 
-	; mov a, CLOCK_STATE									; move CLOCK_STATE into the accumulator
-
-	; cjne a, SET_TIME_STATE, timer_0_service_cont0		; check if CLOCK_STATE is SET_TIME_STATE
-	; 	cpl P0.4										; if CLOCK_STATE is SET_TIME_STATE, flash the decatron
-
-	; 	jb P0.4, timer_0_service_cont2
-	; 		; if P0.4 is low (decatron is off), turn off all grids/nixies except for the one being set
-	; 		mov VFD_MASK, VFD_FLASH_MASK
-	; 		mov NIX_MASK, NIX_FLASH_MASK
-	; 		ljmp timer_0_service_cont1					; jump to the end of ISR
-	; 	timer_0_service_cont2:
-	; 		; if P0.4 is high (decatron is on), turn on all grids/nixies
-	; 		mov VFD_MASK, #0FFh
-	; 		mov NIX_MASK, #0FFh
-
-	; 	ljmp timer_0_service_cont1						; jump to the end of ISR
-
-	; timer_0_service_cont0:
-	
-	; ; Move in mask values (so displays turn on after flashing in set mode)
-	; mov VFD_MASK, #0FFh
-	; mov NIX_MASK, #0FFh
-
 	inc SECONDS 			; increment the seconds
 	mov R6, SECONDS
 	cjne R6, #3Ch, timer_0_service_cont1
@@ -827,7 +691,8 @@ ret
 
 CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 	; This function is used to transisiton between states, such as SET_TIME_STATE, SHOW_ALARM_STATE, etc.
-	; This function listens for a rotary encoder short or long button press and determines which state to go to next based on the current CLOCK_STATE
+	; This function listens for a rotary encoder short or long button press and determines which state to
+	; go to next based on the current CLOCK_STATE
 
 	jnb P3.6, cont14					; check if rotary encoder is still pressed
 		clr BUTTON_FLAG					; if not, clear the encoder button flag
@@ -839,7 +704,8 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 		jb P3.6, cont15					; check if rotary encoder button is pressed
 			mov R2, #0FFh					; load R2 for 255 counts
 			mov R3, #0FFh					; load R3 for 255 counts
-			loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed (also acts as debounce)
+			loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed
+											; (also acts as debounce)
 				jb P3.6, cont15			; check if rotary encoder button is still pressed
 				djnz R3, loop3				; decrement count in R3
 			mov R3, #0FFh					; reload R3 in case loop is needed again
@@ -847,24 +713,20 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 				; if there has been a rot enc short press, determine next state based on current state
 				cjne a, SHOW_TIME_STATE, cont17
 					; if CLOCK_STATE = SHOW_TIME_STATE:
-					;lcall SHOW_TIME_STATE_TO_SHOW_ALARM_STATE
 					mov NEXT_CLOCK_STATE, SHOW_ALARM_STATE
 					ljmp cont16
 				cont17:
 				; only other possibility is that we are in SHOW_ALARM_STATE
-				;lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE
 				mov NEXT_CLOCK_STATE, SHOW_TIME_STATE		
 			cont16:
 			djnz R2, loop3					; count R3 down again until R2 counts down
 			; if there has been a rot enc long press, determine next state based on current state
 			cjne a, SHOW_TIME_STATE, cont18 
 				;if CLOCK_STATE = SHOW_TIME_STATE
-				;lcall SHOW_TIME_STATE_TO_SET_TIME_STATE
 				mov NEXT_CLOCK_STATE, SET_TIME_STATE
 				ljmp cont19
 			cont18:
 			; only other possibility is that we are in SHOW_ALARM_STATE
-			;lcall SHOW_ALARM_STATE_TO_SET_ALARM_STATE
 			mov NEXT_CLOCK_STATE, SET_ALARM_STATE
 			cont19:
 			setb BUTTON_FLAG				; set the rotary encoder button flag
@@ -1237,18 +1099,14 @@ UPDATE_DECA:
 	push 3
 	; push 4
 	push acc
-	push PSW 
-	
-	; jb DECA_RESET_CALLED?, update_deca_cont0	; check if the decatron needs to be initialized
-	; 	lcall DECA_RESET 						; call the decatron init function
-	; 	setb DECA_RESET_CALLED?					; set DECA_RESET_CALLED? flag
-	; update_deca_cont0:
+	push PSW
 
 	mov R3, DECA_STATE							; move DECA_STATE to R3
 
-	;============
+	; ==========================================
 	mov a, DECATRON   							; move DECATRON into the accumulator
-	cjne a, #00h, deca_test_cont0				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end, otherwise, continue
+	cjne a, #00h, deca_test_cont0				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end,
+												; otherwise, continue
 		
 		; FIX -- FOR FAST MODE
 		;mov DECATRON, #01						; move 1 into decatron (don't blank in fast mode, so the decatron always starts in the same spot)
@@ -1263,13 +1121,11 @@ UPDATE_DECA:
 		ljmp update_deca_cont6 					; exit (NOTE: "ret" DOES NOT work for some reason...)
 	deca_test_cont0:
 
-	; mov a, DECATRON   							; move DECATRON into the accumulator
 	cjne a, #01h, deca_test_cont1				; if DECATRON = 1, then no need to toggle, skip to the end, otherwise, continue
-		;mov R4, DECATRON 						; reload R4
 		lcall DECA_RESET 						; reset the decatron (light up K0)
 		ljmp update_deca_cont6 					; exit (NOTE: "ret" DOES NOT work for some reason...)
 	deca_test_cont1:
-	;============
+	; ==========================================
 
 	djnz R4, update_deca_cont1 					; decrement R4 by 1, and check if it is zero
 		lcall DECA_TOGGLE						; if R4 is zero, toggle the deca (call DECA_TOGGLE)
@@ -1352,7 +1208,8 @@ DECA_TOGGLE:
 	cpl DECA_FORWARDS? 							; toggle the swiping direction
 
 	; mov a, DECATRON   							; move DECATRON into the accumulator
-	; cjne a, #00h, deca_toggle_cont8				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end, otherwise, continue
+	; cjne a, #00h, deca_toggle_cont8				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end,
+													; otherwise, continue
 		
 	; 	; FIX -- FOR FAST MODE
 	; 	;mov DECATRON, #01						; move 1 into decatron (don't blank in fast mode, so the decatron always starts in the same spot)
@@ -1493,15 +1350,6 @@ ENC_A:
 		setb A_FLAG
 	enc_a_cont1:
 
-	; jb A_FLAG, enc_a_cont0 						; check if A_FLAG is set
-	; 	; if A_FLAG is not set:
-	; 	setb B_FLAG 							; set B_FLAG
-	; 	sjmp enc_a_cont1 						; jump to exit
-	; enc_a_cont0:
-	; ; if A_FLAG is set:
-	; clr A_FLAG 									; clear A_FLAG
-	; inc @R0 									; increment the register R0 is pointing to
-
 	jnb INC_LEAP_YEAR?, enc_a_cont2				; check if INC_LEAP_YEAR? bit is set
 		;if INC_LEAP_YEAR? bit is set, increment @R0 (YEAR) three more times (for a total of 4 times) 
 		inc @R0
@@ -1539,15 +1387,6 @@ ENC_B:
 		mov NIX_MASK, #0FFh							; make all displays visible
 		setb B_FLAG
 	enc_b_cont1:
-
-	; jb B_FLAG, enc_b_cont0 						; check if B_FLAG is set
-	; 	; if B_FLAG is not set:
-	; 	setb A_FLAG 							; set A_FLAG
-	; 	sjmp enc_b_cont1 						; jump to exit
-	; enc_b_cont0:
-	; ; if B_FLAG is set:
-	; clr B_FLAG 									; clear B_FLAG
-	; dec @R0										; decrement the register R0 is pointing to
 
 	jnb INC_LEAP_YEAR?, enc_b_cont2				; check if INC_LEAP_YEAR? bit is set
 		;if INC_LEAP_YEAR? bit is set, decrement @R0 (YEAR) three more times (for a total of 4 times) 
@@ -1602,7 +1441,6 @@ TWLV_TWFR_HOUR_ADJ:
 		sjmp twlv_twfr_hour_adj_cont3
 
 	twlv_twfr_hour_adj_cont2:
-	;mov a, HOURS
 	mov a, @R1
 
 	twlv_twfr_hour_adj_cont1:
