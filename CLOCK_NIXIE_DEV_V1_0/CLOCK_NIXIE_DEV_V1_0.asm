@@ -358,7 +358,7 @@ SHOW_TIME:
 	show_time_cont1:
 
 	; change state if needed
-	mov CLOCK_STATE, NEXT_CLOCK_STATE	
+	; mov CLOCK_STATE, NEXT_CLOCK_STATE	
 
 ljmp MAIN
 
@@ -426,11 +426,20 @@ SET_TIME:
 		mov VFD_FLASH_MASK, #0E7h
 		mov NIX_FLASH_MASK, #0FFh
 
-		lcall DD_ADJ
+		; Upper and lower bounds set in DD_ADJ
+		lcall DD_ADJ							; adjust bounds so you can't set invalid date
 
 		mov R0, #4Dh							; corresponds to memory address of DAY
 
 		set_dd_loop1:
+
+		; Check for timeout event
+		mov a, SECONDS
+		cjne a, TIMEOUT, set_dd_cont2
+			lcall YY_ADJ 						; check for valid year, given month and day
+			clr INC_LEAP_YEAR? 					; clear the leap year bit
+			ljmp SET_SECONDS
+		set_dd_cont2:
 
 		; check for a rotary encoder short press
 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
@@ -467,11 +476,19 @@ SET_TIME:
 		mov VFD_FLASH_MASK, #3Fh
 		mov NIX_FLASH_MASK, #0FFh
 
-		lcall YY_ADJ
+		; Upper and lower bounds set in YY_ADJ
+		lcall YY_ADJ							; adjust bounds so you can't set invalid date
 
 		mov R0, #4Eh							; corresponds to memory address of YEAR
 
 		set_yy_loop1:
+
+		; Check for timeout event
+		mov a, SECONDS
+		cjne a, TIMEOUT, set_yy_cont2
+			clr INC_LEAP_YEAR? 					; clear the leap year bit
+			ljmp SET_SECONDS
+		set_yy_cont2:
 
 		; check for a rotary encoder short press
 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
@@ -518,6 +535,12 @@ SET_TIME:
 
 		set_hr_loop1:
 
+		; Check for timeout event
+		mov a, SECONDS
+		cjne a, TIMEOUT, set_hr_cont2
+			ljmp SET_SECONDS
+		set_hr_cont2:
+
 		; check for a rotary encoder short press
 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
 		jnb TRANSITION_STATE?, set_hr_cont3
@@ -548,6 +571,12 @@ SET_TIME:
 
 		set_min_loop1:
 
+		; Check for timeout event
+		mov a, SECONDS
+		cjne a, TIMEOUT, set_min_cont2
+			ljmp SET_SECONDS
+		set_min_cont2:
+
 		; check for a rotary encoder short press
 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
 		jnb TRANSITION_STATE?, set_min_cont3
@@ -566,7 +595,7 @@ SET_TIME:
 		mov NIX1, MIN_ONES
 
 		; Update the hours if 12/24 hour switch is flipped
-		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+		mov R1, #45h 		; move the address of HOURS (*note: not MINUTES) into R1 (for TWLV_TWFR_HOUR_ADJ)
 		lcall TWLV_TWFR_HOUR_ADJ
 
 		sjmp set_min_loop1
@@ -580,13 +609,8 @@ SET_TIME:
 
 		mov SECONDS, #00h 						; set seconds back to 0
 
-		clr EX0						; disable external interrupt 0
-		clr EX1						; disable external interrupt 1
-
-		; Change the clock state
-		mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
-		lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
-		         									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
+		; Transistion states
+		lcall SET_TIME_STATE_TO_SHOW_TIME_STATE
 
 ljmp MAIN
 
@@ -627,15 +651,103 @@ SHOW_ALARM:
 	mov a, SECONDS
 	cjne a, TIMEOUT, show_alarm_cont2
 		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE
-		mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
+		; mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
 	show_alarm_cont2:
 
 	; change state if needed
-	mov CLOCK_STATE, NEXT_CLOCK_STATE
+	; mov CLOCK_STATE, NEXT_CLOCK_STATE
 
 ljmp MAIN
 
 SET_ALARM:
+	clr ROT_FLAG									; clear the ROT_FLAG
+	clr INC_LEAP_YEAR? 								; clear the INC_LEAP_YEAR? flag
+
+	; Set the alarm hours
+	SET_ALARM_HR:
+
+		; Clear the TRANSITION_STATE? bit
+		clr TRANSITION_STATE?
+
+		; Move in mask values
+		mov VFD_FLASH_MASK, #0FFh
+		mov NIX_FLASH_MASK, #0CFh
+
+		; Set the upper and lower bounds
+		mov UPPER_BOUND, #17h 					; hours can be 23 max
+		mov LOWER_BOUND, #00h 					; hours can be 0 min
+
+		mov R0, #5Bh							; corresponds to memory address of ALARM_HOURS
+
+		set_alarm_hr_loop1:
+
+		; Check for timeout event
+		mov a, SECONDS
+		cjne a, TIMEOUT, set_alarm_hr_cont2
+			lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE
+			ljmp MAIN
+		set_alarm_hr_cont2:
+
+		; check for a rotary encoder short press
+		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+		jnb TRANSITION_STATE?, set_alarm_hr_cont3
+			ljmp SET_ALARM_MIN 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+		set_alarm_hr_cont3:
+
+		mov R1, #5Bh 		; move the address of ALARM_HOURS (*note: not ALARM_MINUTES) into R1 (for TWLV_TWFR_HOUR_ADJ)
+		lcall TWLV_TWFR_HOUR_ADJ
+
+		sjmp set_alarm_hr_loop1
+
+
+	; Set the alarm minutes
+	SET_ALARM_MIN:
+
+		; Clear the TRANSITION_STATE? bit
+		clr TRANSITION_STATE?
+
+		; Move in mask values
+		mov VFD_FLASH_MASK, #0FFh
+		mov NIX_FLASH_MASK, #3Fh
+
+		; Set the upper and lower bounds
+		mov UPPER_BOUND, #3Bh 					; minutes can be 59 max
+		mov LOWER_BOUND, #00h 					; minutes can be 0 min
+
+		mov R0, #5Ch							; corresponds to memory address of ALARM_MINUTES
+
+		set_alarm_min_loop1:
+
+		; Check for timeout event
+		mov a, SECONDS
+		cjne a, TIMEOUT, set_alarm_min_cont2
+			lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE
+			ljmp MAIN
+		set_alarm_min_cont2:
+
+		; check for a rotary encoder short press
+		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+		jnb TRANSITION_STATE?, set_alarm_min_cont3
+			lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+			ljmp MAIN
+		set_alarm_min_cont3:
+
+		; Operations to dispay ALARM_MINUTES register in decimal format: MIN
+		mov a, ALARM_MINUTES
+		mov b, #0Ah
+		div ab
+		mov MIN_TENS, a
+		mov MIN_ONES, b
+
+		; Display ALARM_MINUTES:
+		mov NIX2, MIN_TENS
+		mov NIX1, MIN_ONES
+
+		; Update the hours if 12/24 hour switch is flipped
+		mov R1, #5Bh 		; move the address of ALARM_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+		lcall TWLV_TWFR_HOUR_ADJ
+
+		sjmp set_alarm_min_loop1
 
 ljmp MAIN
 
@@ -651,6 +763,13 @@ TIMER_0_SERVICE:
 	mov R6, SECONDS
 	cjne R6, #3Ch, timer_0_service_cont1
 		mov SECONDS, #00h
+
+		; check if in SET_TIME_STATE, in which case, don't roll the seconds over into the minutes
+		mov a, CLOCK_STATE
+		cjne a, SET_TIME_STATE, timer_0_service_cont2
+			ljmp timer_0_service_cont1
+		timer_0_service_cont2:
+
 		inc MINUTES
 		mov R6, MINUTES
 		cjne R6, #3Ch, timer_0_service_cont1
@@ -687,7 +806,6 @@ CHECK_FOR_ROT_ENC_SHORT_PRESS:
 			setb TRANSITION_STATE?					; set the TRANSITION_STATE? bit
 	check_short_press_cont1:
 ret
-
 
 CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 	; This function is used to transisiton between states, such as SET_TIME_STATE, SHOW_ALARM_STATE, etc.
@@ -733,6 +851,16 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 	cont15:
 ret
 
+SET_TIME_STATE_TO_SHOW_TIME_STATE:
+	clr EX0						; disable external interrupt 0
+	clr EX1						; disable external interrupt 1
+
+	; Change the clock state
+	mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
+	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
+	         									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
+ret
+
 SHOW_TIME_STATE_TO_SHOW_ALARM_STATE:
 	; set timeout (10 seconds)
 	mov a, SECONDS 		; move SECONDS into acc 
@@ -751,15 +879,14 @@ SHOW_TIME_STATE_TO_SHOW_ALARM_STATE:
 	mov GRID3, #0Fh 	; "r"		
 	mov GRID2, #011h 	; "n"
 	mov GRID1, #011h 	; "n"
+
+	; Update CLOCK_STATE
+	mov CLOCK_STATE, SHOW_ALARM_STATE
 ret
 
 SHOW_TIME_STATE_TO_SET_TIME_STATE:
 	; set timeout (59 seconds)
-	mov a, SECONDS 		; move SECONDS into acc 
-	mov b, #3Ch 		; move 60 (dec) into b
-	add a, #3Bh 		; add 59 (dec) to the acc
-	div ab 				; divide a by b
-	mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+	lcall ADJUST_TIMEOUT
 
 	; initalize external interrupts for rotary encoder
 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
@@ -767,21 +894,53 @@ SHOW_TIME_STATE_TO_SET_TIME_STATE:
 	setb EX0						; enable external interrupt 0
 	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
 	setb EX1						; enable external interrupt 1
+
+	; Update CLOCK_STATE
+	mov CLOCK_STATE, SET_TIME_STATE
 ret
 
 SHOW_ALARM_STATE_TO_SET_ALARM_STATE:
+	; set timeout (59 seconds)
+	lcall ADJUST_TIMEOUT
+
 	; initalize external interrupts for rotary encoder
 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
 	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
 	setb EX0						; enable external interrupt 0
 	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
 	setb EX1						; enable external interrupt 1
+
+	; Update CLOCK_STATE
+	mov CLOCK_STATE, SET_ALARM_STATE
+ret
+
+SET_ALARM_STATE_TO_SHOW_ALARM_STATE:
+	; set timeout (10 seconds)
+	mov a, SECONDS 		; move SECONDS into acc 
+	mov b, #3Ch 		; move 60 (dec) into b
+	add a, #0Ah 		; add 10 (dec) to the acc
+	div ab 				; divide a by b
+	mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	clr EX0						; disable external interrupt 0
+	clr EX1						; disable external interrupt 1
+
+	; Update CLOCK_STATE
+	mov CLOCK_STATE, SHOW_ALARM_STATE
+	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
+	         									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
 ret
 
 SHOW_ALARM_STATE_TO_SHOW_TIME_STATE:
 	; Display "-" in grids 3 & 6
 	mov GRID6, #0Ah 	; write dash to grid 6 for date
 	mov GRID3, #0Ah 	; write dash to grid 3 for date
+
+	; Update CLOCK_STATE
+	mov CLOCK_STATE, SHOW_TIME_STATE
 ret
 ; ========================================
 
@@ -793,21 +952,41 @@ UPDATE_DISPLAYS:
 	; ISSUE?
 	djnz R5, update_displays_cont0		; decrement the display update count, if it is zero, update the nixies
 		lcall UPDATE_NIX				; update the nixies
-		lcall FLASH_DISPLAYS 			; flash displays for set modes
+		lcall CHECK_TO_FLASH_DISPLAYS 	; flash displays for set modes
 		mov R5, #0Ch					; reset R5 with a value of 12
 	update_displays_cont0:
 ret
 
-
-FLASH_DISPLAYS:
+CHECK_TO_FLASH_DISPLAYS:
 	push acc
 
-	mov a, CLOCK_STATE									; move CLOCK_STATE into the accumulator
-	cjne a, SET_TIME_STATE, flash_displays_cont0		; check if in SET_TIME_STATE, otherwise skip this
+	mov a, CLOCK_STATE										; move CLOCK_STATE into the accumulator
+	cjne a, SET_TIME_STATE, check_to_flash_displays_cont0	; check if in SET_TIME_STATE, otherwise skip this
+		lcall FLASH_DISPLAYS
+		ljmp check_to_flash_displays_cont3
+	check_to_flash_displays_cont0:
+
+	cjne a, SET_ALARM_STATE, check_to_flash_displays_cont1	; check if in SET_ALARM_STATE, otherwise skip this
+		lcall FLASH_DISPLAYS
+		ljmp check_to_flash_displays_cont3
+	check_to_flash_displays_cont1:
+
+	check_to_flash_displays_cont2:
+		; if P0.4 is high (decatron is on), turn on all grids/nixies
+		mov VFD_MASK, #0FFh
+		mov NIX_MASK, #0FFh
+
+		clr ROT_FLAG				; clear the rotation flag (gets set in ENC_A or ENC_B ISR)
+
+	check_to_flash_displays_cont3:
+	pop acc
+ret
+
+FLASH_DISPLAYS:
 
 	djnz R7, flash_displays_cont1						; decrement the flash display count, if it is zero, toggle mask
 		mov R7, #090h									; reset R7 for next interrupt
-		cpl P0.4										; if CLOCK_STATE is SET_TIME_STATE, flash the decatron
+		cpl P0.4										; if CLOCK_STATE is SET_TIME_STATE or SET_ALARM_STATE, flash the decatron
 		mov DECATRON, #1Eh								; move 30 into decatron (to light up full)
 
 		jb P0.4, flash_displays_cont0
@@ -826,9 +1005,7 @@ FLASH_DISPLAYS:
 		clr ROT_FLAG				; clear the rotation flag (gets set in ENC_A or ENC_B ISR)
 
 	flash_displays_cont1:
-	pop acc
 ret
-
 
 UPDATE_NIX:
 	; This function sequentially cycles through each nixie bulb and applies the appropriate
@@ -876,13 +1053,11 @@ UPDATE_NIX:
 	pop 1
 ret
 
-
 NIX_RESET:
 	; This function resets the nixie registers after a complete cycle
 	mov NIX_EN, #10h			; initialize nixie enable nibble
 	mov NIX_INDX, #3Eh 			; initalize nixie index (start with nixie 4). This should reflect the memory location of NIX4.
 ret
-
 
 UPDATE_VFD:
 	; This function squentially cycles through each VFD grid and applies the appropriate
@@ -1072,7 +1247,6 @@ UPDATE_VFD:
 	pop 1					; restore value of R1 to value before UPDATE_VFD was called
 ret
 
-
 VFD_RESET:
 	; This function resets the VFD registers after a complete cycle
 
@@ -1081,7 +1255,6 @@ VFD_RESET:
 	mov GRID_EN_2, #00h
 	mov GRID_INDX, #33h 	; corresponds to memory location of GRID9
 ret
-
 
 UPDATE_DECA:
 	; This function sequentially cycles through any active (as dictated by DECATRON)
@@ -1188,7 +1361,6 @@ UPDATE_DECA:
 	pop 3
 ret
 
-
 DECA_TOGGLE:
 	; This function is called from UPDATE_DECA whenever the swiping direction has to change.
 	; If going from forward to backwards, DECA_STATE is decremented by 2 (incremented by 1) (mod 3).
@@ -1282,7 +1454,6 @@ DECA_TOGGLE:
 	deca_toggle_cont1:
 ret 											; exit
 
-
 DECA_RESET:
 	mov DECA_STATE, #00h   			; initialize the decatron
 
@@ -1303,7 +1474,7 @@ ret
 DECA_TRANSITION:
 	; This function is used to start the decatron at an arbitrary number of seconds.  It does so by starting with DECATRON at zero,
 	; then quickily incrementing DECATRON (fast mode) until DECATRON == SECONDS.  An example where this transistion would be used
-	; is going from SET ALARM --> SHOW TIME
+	; is going from SET ALARM --> SHOW ALARM
 
 	mov DECATRON, #00h 								; start with DECATRON=0
 	lcall MED_DELAY 								; delay
@@ -1345,6 +1516,7 @@ ENC_A:
 	jb A_FLAG, enc_a_cont2
 		inc @R0
 		setb ROT_FLAG								; set the rotation flag
+		lcall ADJUST_TIMEOUT 						; adjust any timeouts that may be active
 		mov VFD_MASK, #0FFh							; make all displays visible
 		mov NIX_MASK, #0FFh							; make all displays visible
 		setb A_FLAG
@@ -1383,6 +1555,7 @@ ENC_B:
 	jb B_FLAG, enc_b_cont2
 		dec @R0
 		setb ROT_FLAG								; set the rotation flag
+		lcall ADJUST_TIMEOUT 						; adjust any timeouts that may be active
 		mov VFD_MASK, #0FFh							; make all displays visible
 		mov NIX_MASK, #0FFh							; make all displays visible
 		setb B_FLAG
@@ -1610,6 +1783,21 @@ LONG_DELAY:
 
 	pop 1
 	pop 0
+ret
+
+ADJUST_TIMEOUT:
+	push acc
+	push b
+
+	; set timeout (59 seconds)
+	mov a, SECONDS 		; move SECONDS into acc 
+	mov b, #3Ch 		; move 60 (dec) into b
+	add a, #3Bh 		; add 59 (dec) to the acc
+	div ab 				; divide a by b
+	mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+
+	pop b
+	pop acc
 ret
 
 end
