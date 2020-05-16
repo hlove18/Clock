@@ -42,27 +42,57 @@ INIT:
 	mov R7, #090h 			; try toggling the flashing less often
 
 	; ====== State Variables ======
-	; State Variable:
+	; Clock State Variable:
 	.equ CLOCK_STATE, 7Fh
-
-	; State Space:
-	.equ SHOW_TIME_STATE, 7Eh
-	.equ SET_TIME_STATE,  7Dh
-	.equ SHOW_ALARM_STATE, 7Ch
-	
 	.equ NEXT_CLOCK_STATE, 7Bh
 	.equ TIMEOUT, 7Ah
-	.equ SET_ALARM_STATE, 79h
 
-	mov SHOW_TIME_STATE, #01h
-	mov SET_TIME_STATE,  #02h
-	mov SHOW_ALARM_STATE, #03h
-	mov SET_ALARM_STATE, #04h
-	mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
+	SHOW_TIME_STATE equ 1
+	SET_TIME_STATE equ 2
+	SHOW_ALARM_STATE equ 3
+	SET_ALARM_STATE equ 4
+	mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
 
 	; !!!NOTE: THIS IS DIFFERENT THAN YOU WOULD EXPECT: MOV iram_addr1,iram_addr2 MOVES CONTENTS OF iram_addr1 INTO iram_addr2!!!
 	; COULD BE WRONG!!:
-	mov CLOCK_STATE, SHOW_TIME_STATE	; start in SHOW_TIME_STATE
+	mov CLOCK_STATE, #SHOW_TIME_STATE	; start in SHOW_TIME_STATE
+
+	; Set Time Sub-State Variable:
+	.equ SET_TIME_SUB_STATE, 7Dh
+
+	SET_MM_STATE equ 1
+	SET_DD_STATE equ 2
+	SET_YY_STATE equ 3
+	SET_HR_STATE equ 4
+	SET_MIN_STATE equ 5
+	mov SET_TIME_SUB_STATE, #SET_MM_STATE
+
+	; Set Alarm Sub-State Variable:
+	.equ SET_ALARM_SUB_STATE, 7Ch
+
+	SET_ALARM_HR_STATE equ 1
+	SET_ALARM_MIN_STATE equ 2
+	mov SET_ALARM_SUB_STATE, #SET_ALARM_HR_STATE
+
+	; Alarm State Variable:
+	.equ ALARM_STATE, 7Eh
+
+	; Alarm State Space:
+	ALARM_ENABLED_STATE equ 1
+	ALARM_DISABLED_STATE equ 2
+	ALARM_FIRING_STATE equ 3
+	ALARM_SNOOZING_STATE equ 4
+
+	; Check alarm on/off switch to intitialize state variable
+	jnb P0.5, init_cont0
+		mov ALARM_STATE, #ALARM_ENABLED_STATE 			; alarm is enabled if P0.5 is high
+		setb P1.6 										; turn on alarm light
+		sjmp init_cont1
+
+	init_cont0:
+		mov ALARM_STATE, #ALARM_DISABLED_STATE 			; alarm is disabled if P0.5 is low
+		clr P1.6 										; turn off alarm light
+	init_cont1:
 	; =============================
 
 	; ====== VFD Variables ======
@@ -186,10 +216,10 @@ INIT:
 	.equ YY_TENS, 	53h
 	.equ YY_ONES, 	54h
 
-	; Initialize date as 01-01-19
+	; Initialize date as 01-31-20
 	mov MONTH, 	#01h
 	mov DAY, 	#1Fh
-	mov YEAR, 	#13h
+	mov YEAR, 	#14h
 	; ============================
 
 	; ====== Flash Variables ======
@@ -208,12 +238,16 @@ INIT:
 	; ============================
 
 	; ====== Alarm Variables ======
-	.equ ALARM_HOURS,	5Bh
-	.equ ALARM_MINUTES,	5Ch
+	.equ ALARM_HOURS,		5Bh
+	.equ ALARM_MINUTES,		5Ch
+	.equ SNOOZE_MINUTES,	5Dh
+	.equ SNOOZE_DURATION, 	5Eh
 
 	; Initialize alarm
 	mov ALARM_HOURS, #00h
 	mov ALARM_MINUTES, #05h
+	mov SNOOZE_MINUTES, #05h
+	mov SNOOZE_DURATION, #01h
 	; ============================
 
 	; Clear the carry flag
@@ -274,25 +308,60 @@ INIT:
 MAIN:
 	mov a, CLOCK_STATE
 
-	cjne a, SHOW_TIME_STATE, main_cont0
-		ljmp SHOW_TIME
+	cjne a, #SHOW_TIME_STATE, main_cont0
+		lcall SHOW_TIME
+		sjmp main_cont3
 	main_cont0:
 
-	cjne a, SET_TIME_STATE, main_cont1
-		ljmp SET_TIME
+	cjne a, #SET_TIME_STATE, main_cont1
+		lcall SET_TIME
+		sjmp main_cont3
 	main_cont1:
 
-	cjne a, SHOW_ALARM_STATE, main_cont2
-		ljmp SHOW_ALARM
+	cjne a, #SHOW_ALARM_STATE, main_cont2
+		lcall SHOW_ALARM
+		sjmp main_cont3
 	main_cont2:
 
-	cjne a, SET_ALARM_STATE, main_cont3
-		ljmp SET_ALARM
+	cjne a, #SET_ALARM_STATE, main_cont3
+		lcall SET_ALARM
 	main_cont3:
 
-	sjmp MAIN
+
+	; cjne a, #SETTINGS_STATE, main_cont4
+	; 	lcall SHOW_ALARM
+	; main_cont4:
+
+	; cjne a, #GPS_SYNC_STATE, main_cont5
+	; 	lcall SET_ALARM
+	; main_cont5:
+
+	; ======================================
+	mov a, ALARM_STATE
+
+	cjne a, #ALARM_ENABLED_STATE, main_cont6
+		lcall ALARM_ENABLED
+		sjmp main_cont9
+	main_cont6:
+
+	cjne a, #ALARM_DISABLED_STATE, main_cont7
+		lcall ALARM_DISABLED
+		sjmp main_cont9
+	main_cont7:
+
+	cjne a, #ALARM_FIRING_STATE, main_cont8
+		lcall ALARM_FIRING
+		sjmp main_cont9
+	main_cont8:
+
+	cjne a, #ALARM_SNOOZING_STATE, main_cont9
+		lcall ALARM_SNOOZING
+	main_cont9:
+sjmp MAIN
 
 
+
+; ========= Clock State Functions ==========
 SHOW_TIME:
 	; Split the month
 	mov a, MONTH
@@ -345,274 +414,307 @@ SHOW_TIME:
 	mov DECATRON, SECONDS
 
 	; listen for rotary encoder press
-	mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
+	mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
 	lcall CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS
 
 	; Check the NEXT_CLOCK_STATE
 	mov a, NEXT_CLOCK_STATE
-	cjne a, SHOW_ALARM_STATE, show_time_cont0
+	cjne a, #SHOW_ALARM_STATE, show_time_cont0
 		lcall SHOW_TIME_STATE_TO_SHOW_ALARM_STATE
 	show_time_cont0:
-	cjne a, SET_TIME_STATE, show_time_cont1
+	cjne a, #SET_TIME_STATE, show_time_cont1
 		lcall SHOW_TIME_STATE_TO_SET_TIME_STATE
 	show_time_cont1:
 
 	; change state if needed
 	; mov CLOCK_STATE, NEXT_CLOCK_STATE	
-
-ljmp MAIN
-
-
-SET_TIME:
-	clr ROT_FLAG									; clear the ROT_FLAG
-
-	; Set the month
-	SET_MM:
-
-		; Clear the TRANSITION_STATE? bit
-		clr TRANSITION_STATE?
-
-		; Move in mask values
-		mov VFD_FLASH_MASK, #0FCh
-		mov NIX_FLASH_MASK, #0FFh
-
-		; Set the upper and lower bounds
-		mov UPPER_BOUND, #0Ch 					; months can be 12 max
-		mov LOWER_BOUND, #01h 					; months can be 1 min
-
-		mov R0, #4Ch							; corresponds to memory address of MONTH
-
-		set_mm_loop1:
-
-		; Check for timeout event
-		mov a, SECONDS
-		cjne a, TIMEOUT, set_mm_cont2
-			lcall DD_ADJ 						; check for valid day, given month
-			lcall YY_ADJ 						; check for valid year, given month and day
-			clr INC_LEAP_YEAR? 					; clear the leap year bit
-			ljmp SET_SECONDS
-		set_mm_cont2:
-
-		; check for a rotary encoder short press
-		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-		jnb TRANSITION_STATE?, set_mm_cont3
-			ljmp SET_DD 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-		set_mm_cont3:
-
-		; Operations to dispay MONTH register in decimal format: MM
-		mov a, MONTH
-		mov b, #0Ah
-		div ab
-		mov MM_TENS, a
-		mov MM_ONES, b
-
-		; Display MONTH:
-		mov GRID8, MM_TENS
-		mov GRID7, MM_ONES
-
-		; Update the hours if 12/24 hour switch is flipped
-		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
-		lcall TWLV_TWFR_HOUR_ADJ
-
-		sjmp set_mm_loop1
-		
-	; Set the day
-	SET_DD:
-
-		; Clear the TRANSITION_STATE? bit
-		clr TRANSITION_STATE?
-
-		; Move in mask values
-		mov VFD_FLASH_MASK, #0E7h
-		mov NIX_FLASH_MASK, #0FFh
-
-		; Upper and lower bounds set in DD_ADJ
-		lcall DD_ADJ							; adjust bounds so you can't set invalid date
-
-		mov R0, #4Dh							; corresponds to memory address of DAY
-
-		set_dd_loop1:
-
-		; Check for timeout event
-		mov a, SECONDS
-		cjne a, TIMEOUT, set_dd_cont2
-			lcall YY_ADJ 						; check for valid year, given month and day
-			clr INC_LEAP_YEAR? 					; clear the leap year bit
-			ljmp SET_SECONDS
-		set_dd_cont2:
-
-		; check for a rotary encoder short press
-		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-		jnb TRANSITION_STATE?, set_dd_cont3
-			ljmp SET_YY 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-		set_dd_cont3:
-
-		; Operations to dispay DAY register in decimal format: DD
-		mov a, DAY
-		mov b, #0Ah
-		div ab
-		mov DD_TENS, a
-		mov DD_ONES, b
-
-		; Display DAY:
-		mov GRID5, DD_TENS
-		mov GRID4, DD_ONES
-
-		; Update the hours if 12/24 hour switch is flipped
-		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
-		lcall TWLV_TWFR_HOUR_ADJ
-
-		ljmp set_dd_loop1
-
-
-
-	; Set the year
-	SET_YY:
-
-		; Clear the TRANSITION_STATE? bit
-		clr TRANSITION_STATE?
-
-		; Move in mask values
-		mov VFD_FLASH_MASK, #3Fh
-		mov NIX_FLASH_MASK, #0FFh
-
-		; Upper and lower bounds set in YY_ADJ
-		lcall YY_ADJ							; adjust bounds so you can't set invalid date
-
-		mov R0, #4Eh							; corresponds to memory address of YEAR
-
-		set_yy_loop1:
-
-		; Check for timeout event
-		mov a, SECONDS
-		cjne a, TIMEOUT, set_yy_cont2
-			clr INC_LEAP_YEAR? 					; clear the leap year bit
-			ljmp SET_SECONDS
-		set_yy_cont2:
-
-		; check for a rotary encoder short press
-		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-		jnb TRANSITION_STATE?, set_yy_cont3
-			ljmp SET_HR 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-		set_yy_cont3:
-
-		; Operations to dispay YEAR register in decimal format: YY
-		mov a, YEAR
-		mov b, #0Ah
-		div ab
-		mov YY_TENS, a
-		mov YY_ONES, b
-
-		; Display YEAR:
-		mov GRID2, YY_TENS
-		mov GRID1, YY_ONES
-
-		; Update the hours if 12/24 hour switch is flipped
-		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
-		lcall TWLV_TWFR_HOUR_ADJ
-
-		ljmp set_yy_loop1
-
-
-	; Set the hours
-	SET_HR:
-
-		; Clear the TRANSITION_STATE? bit
-		clr TRANSITION_STATE?
-
-		; Move in mask values
-		mov VFD_FLASH_MASK, #0FFh
-		mov NIX_FLASH_MASK, #0CFh
-
-		; clear the leap year bit
-		clr INC_LEAP_YEAR?
-
-		; Set the upper and lower bounds
-		mov UPPER_BOUND, #17h 					; hours can be 23 max
-		mov LOWER_BOUND, #00h 					; hours can be 0 min
-
-		mov R0, #45h							; corresponds to memory address of HOURS
-
-		set_hr_loop1:
-
-		; Check for timeout event
-		mov a, SECONDS
-		cjne a, TIMEOUT, set_hr_cont2
-			ljmp SET_SECONDS
-		set_hr_cont2:
-
-		; check for a rotary encoder short press
-		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-		jnb TRANSITION_STATE?, set_hr_cont3
-			ljmp SET_MIN 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-		set_hr_cont3:
-
-		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
-		lcall TWLV_TWFR_HOUR_ADJ
-
-		sjmp set_hr_loop1
-
-
-	; Set the minutes
-	SET_MIN:
-
-		; Clear the TRANSITION_STATE? bit
-		clr TRANSITION_STATE?
-
-		; Move in mask values
-		mov VFD_FLASH_MASK, #0FFh
-		mov NIX_FLASH_MASK, #3Fh
-
-		; Set the upper and lower bounds
-		mov UPPER_BOUND, #3Bh 					; minutes can be 59 max
-		mov LOWER_BOUND, #00h 					; minutes can be 0 min
-
-		mov R0, #46h							; corresponds to memory address of MINUTES
-
-		set_min_loop1:
-
-		; Check for timeout event
-		mov a, SECONDS
-		cjne a, TIMEOUT, set_min_cont2
-			ljmp SET_SECONDS
-		set_min_cont2:
-
-		; check for a rotary encoder short press
-		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-		jnb TRANSITION_STATE?, set_min_cont3
-			ljmp SET_SECONDS					; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-		set_min_cont3:
-
-		; Operations to dispay MINUTES register in decimal format: MIN
-		mov a, MINUTES
-		mov b, #0Ah
-		div ab
-		mov MIN_TENS, a
-		mov MIN_ONES, b
-
-		; Display MINUTES:
-		mov NIX2, MIN_TENS
-		mov NIX1, MIN_ONES
-
-		; Update the hours if 12/24 hour switch is flipped
-		mov R1, #45h 		; move the address of HOURS (*note: not MINUTES) into R1 (for TWLV_TWFR_HOUR_ADJ)
-		lcall TWLV_TWFR_HOUR_ADJ
-
-		sjmp set_min_loop1
-
-
-	; Set the seconds (defaults to zeroing the seconds)
-	SET_SECONDS:
-
-		; Clear the TRANSITION_STATE? bit
-		clr TRANSITION_STATE?
-
-		mov SECONDS, #00h 						; set seconds back to 0
-
-		; Transistion states
+ret
+
+SET_TIME:    ; has a sub-state machine with state variable SET_ALARM_SUB_STATE
+	mov a, SET_TIME_SUB_STATE
+
+	cjne a, #SET_MM_STATE, set_time_cont0
+		lcall SET_MM
+		sjmp set_time_cont4
+	set_time_cont0:
+
+	cjne a, #SET_DD_STATE, set_time_cont1
+		lcall SET_DD
+		sjmp set_time_cont4
+	set_time_cont1:
+
+	cjne a, #SET_YY_STATE, set_time_cont2
+		lcall SET_YY
+		sjmp set_time_cont4
+	set_time_cont2:
+
+	cjne a, #SET_HR_STATE, set_time_cont3
+		lcall SET_HR
+		sjmp set_time_cont4
+	set_time_cont3:
+
+	cjne a, #SET_MIN_STATE, set_time_cont4
+		lcall SET_MIN
+	set_time_cont4:
+
+	; Update the hours if 12/24 hour switch is flipped
+	mov R1, #45h 							; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
+
+	; Check for a timeout event
+	mov a, SECONDS
+	cjne a, TIMEOUT, set_time_cont5
+		lcall DD_ADJ 						; check for valid day, given month
+		lcall YY_ADJ 						; check for valid year, given month and day
+		clr INC_LEAP_YEAR? 					; clear the leap year bit
 		lcall SET_TIME_STATE_TO_SHOW_TIME_STATE
+	set_time_cont5:
+ret
 
-ljmp MAIN
+; SET_TIME:
+; 	clr ROT_FLAG									; clear the ROT_FLAG
+
+; 	; Set the month
+; 	SET_MM:
+
+; 		; Clear the TRANSITION_STATE? bit
+; 		clr TRANSITION_STATE?
+
+; 		; Move in mask values
+; 		mov VFD_FLASH_MASK, #0FCh
+; 		mov NIX_FLASH_MASK, #0FFh
+
+; 		; Set the upper and lower bounds
+; 		mov UPPER_BOUND, #0Ch 					; months can be 12 max
+; 		mov LOWER_BOUND, #01h 					; months can be 1 min
+
+; 		mov R0, #4Ch							; corresponds to memory address of MONTH
+
+; 		set_mm_loop1:
+
+; 		; Check for timeout event
+; 		mov a, SECONDS
+; 		cjne a, TIMEOUT, set_mm_cont2
+; 			lcall DD_ADJ 						; check for valid day, given month
+; 			lcall YY_ADJ 						; check for valid year, given month and day
+; 			clr INC_LEAP_YEAR? 					; clear the leap year bit
+; 			ljmp SET_SECONDS
+; 		set_mm_cont2:
+
+; 		; check for a rotary encoder short press
+; 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+; 		jnb TRANSITION_STATE?, set_mm_cont3
+; 			ljmp SET_DD 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+; 		set_mm_cont3:
+
+; 		; Operations to dispay MONTH register in decimal format: MM
+; 		mov a, MONTH
+; 		mov b, #0Ah
+; 		div ab
+; 		mov MM_TENS, a
+; 		mov MM_ONES, b
+
+; 		; Display MONTH:
+; 		mov GRID8, MM_TENS
+; 		mov GRID7, MM_ONES
+
+; 		; Update the hours if 12/24 hour switch is flipped
+; 		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+; 		lcall TWLV_TWFR_HOUR_ADJ
+
+; 		sjmp set_mm_loop1
+		
+; 	; Set the day
+; 	SET_DD:
+
+; 		; Clear the TRANSITION_STATE? bit
+; 		clr TRANSITION_STATE?
+
+; 		; Move in mask values
+; 		mov VFD_FLASH_MASK, #0E7h
+; 		mov NIX_FLASH_MASK, #0FFh
+
+; 		; Upper and lower bounds set in DD_ADJ
+; 		lcall DD_ADJ							; adjust bounds so you can't set invalid date
+
+; 		mov R0, #4Dh							; corresponds to memory address of DAY
+
+; 		set_dd_loop1:
+
+; 		; Check for timeout event
+; 		mov a, SECONDS
+; 		cjne a, TIMEOUT, set_dd_cont2
+; 			lcall YY_ADJ 						; check for valid year, given month and day
+; 			clr INC_LEAP_YEAR? 					; clear the leap year bit
+; 			ljmp SET_SECONDS
+; 		set_dd_cont2:
+
+; 		; check for a rotary encoder short press
+; 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+; 		jnb TRANSITION_STATE?, set_dd_cont3
+; 			ljmp SET_YY 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+; 		set_dd_cont3:
+
+; 		; Operations to dispay DAY register in decimal format: DD
+; 		mov a, DAY
+; 		mov b, #0Ah
+; 		div ab
+; 		mov DD_TENS, a
+; 		mov DD_ONES, b
+
+; 		; Display DAY:
+; 		mov GRID5, DD_TENS
+; 		mov GRID4, DD_ONES
+
+; 		; Update the hours if 12/24 hour switch is flipped
+; 		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+; 		lcall TWLV_TWFR_HOUR_ADJ
+
+; 		ljmp set_dd_loop1
+
+; 	; Set the year
+; 	SET_YY:
+
+; 		; Clear the TRANSITION_STATE? bit
+; 		clr TRANSITION_STATE?
+
+; 		; Move in mask values
+; 		mov VFD_FLASH_MASK, #3Fh
+; 		mov NIX_FLASH_MASK, #0FFh
+
+; 		; Upper and lower bounds set in YY_ADJ
+; 		lcall YY_ADJ							; adjust bounds so you can't set invalid date
+
+; 		mov R0, #4Eh							; corresponds to memory address of YEAR
+
+; 		set_yy_loop1:
+
+; 		; Check for timeout event
+; 		mov a, SECONDS
+; 		cjne a, TIMEOUT, set_yy_cont2
+; 			clr INC_LEAP_YEAR? 					; clear the leap year bit
+; 			ljmp SET_SECONDS
+; 		set_yy_cont2:
+
+; 		; check for a rotary encoder short press
+; 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+; 		jnb TRANSITION_STATE?, set_yy_cont3
+; 			ljmp SET_HR 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+; 		set_yy_cont3:
+
+; 		; Operations to dispay YEAR register in decimal format: YY
+; 		mov a, YEAR
+; 		mov b, #0Ah
+; 		div ab
+; 		mov YY_TENS, a
+; 		mov YY_ONES, b
+
+; 		; Display YEAR:
+; 		mov GRID2, YY_TENS
+; 		mov GRID1, YY_ONES
+
+; 		; Update the hours if 12/24 hour switch is flipped
+; 		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+; 		lcall TWLV_TWFR_HOUR_ADJ
+
+; 		ljmp set_yy_loop1
+
+; 	; Set the hours
+; 	SET_HR:
+
+; 		; Clear the TRANSITION_STATE? bit
+; 		clr TRANSITION_STATE?
+
+; 		; Move in mask values
+; 		mov VFD_FLASH_MASK, #0FFh
+; 		mov NIX_FLASH_MASK, #0CFh
+
+; 		; clear the leap year bit
+; 		clr INC_LEAP_YEAR?
+
+; 		; Set the upper and lower bounds
+; 		mov UPPER_BOUND, #17h 					; hours can be 23 max
+; 		mov LOWER_BOUND, #00h 					; hours can be 0 min
+
+; 		mov R0, #45h							; corresponds to memory address of HOURS
+
+; 		set_hr_loop1:
+
+; 		; Check for timeout event
+; 		mov a, SECONDS
+; 		cjne a, TIMEOUT, set_hr_cont2
+; 			ljmp SET_SECONDS
+; 		set_hr_cont2:
+
+; 		; check for a rotary encoder short press
+; 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+; 		jnb TRANSITION_STATE?, set_hr_cont3
+; 			ljmp SET_MIN 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+; 		set_hr_cont3:
+
+; 		mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+; 		lcall TWLV_TWFR_HOUR_ADJ
+
+; 		sjmp set_hr_loop1
+
+; 	; Set the minutes
+; 	SET_MIN:
+
+; 		; Clear the TRANSITION_STATE? bit
+; 		clr TRANSITION_STATE?
+
+; 		; Move in mask values
+; 		mov VFD_FLASH_MASK, #0FFh
+; 		mov NIX_FLASH_MASK, #3Fh
+
+; 		; Set the upper and lower bounds
+; 		mov UPPER_BOUND, #3Bh 					; minutes can be 59 max
+; 		mov LOWER_BOUND, #00h 					; minutes can be 0 min
+
+; 		mov R0, #46h							; corresponds to memory address of MINUTES
+
+; 		set_min_loop1:
+
+; 		; Check for timeout event
+; 		mov a, SECONDS
+; 		cjne a, TIMEOUT, set_min_cont2
+; 			ljmp SET_SECONDS
+; 		set_min_cont2:
+
+; 		; check for a rotary encoder short press
+; 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+; 		jnb TRANSITION_STATE?, set_min_cont3
+; 			ljmp SET_SECONDS					; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+; 		set_min_cont3:
+
+; 		; Operations to dispay MINUTES register in decimal format: MIN
+; 		mov a, MINUTES
+; 		mov b, #0Ah
+; 		div ab
+; 		mov MIN_TENS, a
+; 		mov MIN_ONES, b
+
+; 		; Display MINUTES:
+; 		mov NIX2, MIN_TENS
+; 		mov NIX1, MIN_ONES
+
+; 		; Update the hours if 12/24 hour switch is flipped
+; 		mov R1, #45h 		; move the address of HOURS (*note: not MINUTES) into R1 (for TWLV_TWFR_HOUR_ADJ)
+; 		lcall TWLV_TWFR_HOUR_ADJ
+
+; 		sjmp set_min_loop1
+
+; 	; Set the seconds (defaults to zeroing the seconds)
+; 	SET_SECONDS:
+
+; 		; Clear the TRANSITION_STATE? bit
+; 		clr TRANSITION_STATE?
+
+; 		mov SECONDS, #00h 						; set seconds back to 0
+
+; 		; Transistion states
+; 		lcall SET_TIME_STATE_TO_SHOW_TIME_STATE
+; ret
 
 SHOW_ALARM:
 
@@ -635,15 +737,15 @@ SHOW_ALARM:
 	mov DECATRON, SECONDS
 
 	; listen for rotary encoder press
-	mov NEXT_CLOCK_STATE, SHOW_ALARM_STATE
+	mov NEXT_CLOCK_STATE, #SHOW_ALARM_STATE
 	lcall CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS
 
 	; Check the NEXT_CLOCK_STATE
 	mov a, NEXT_CLOCK_STATE
-	cjne a, SHOW_TIME_STATE, show_alarm_cont0
+	cjne a, #SHOW_TIME_STATE, show_alarm_cont0
 		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE
 	show_alarm_cont0:
-	cjne a, SET_ALARM_STATE, show_alarm_cont1
+	cjne a, #SET_ALARM_STATE, show_alarm_cont1
 		lcall SHOW_ALARM_STATE_TO_SET_ALARM_STATE
 	show_alarm_cont1:
 
@@ -651,113 +753,315 @@ SHOW_ALARM:
 	mov a, SECONDS
 	cjne a, TIMEOUT, show_alarm_cont2
 		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE
-		; mov NEXT_CLOCK_STATE, SHOW_TIME_STATE
+		; mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
 	show_alarm_cont2:
 
 	; change state if needed
 	; mov CLOCK_STATE, NEXT_CLOCK_STATE
+ret
 
-ljmp MAIN
+SET_ALARM:  ; has a sub-state machine with state variable SET_ALARM_SUB_STATE
+	mov a, SET_ALARM_SUB_STATE
 
-SET_ALARM:
-	clr ROT_FLAG									; clear the ROT_FLAG
-	clr INC_LEAP_YEAR? 								; clear the INC_LEAP_YEAR? flag
+	cjne a, #SET_ALARM_HR_STATE, set_alarm_cont0
+		lcall SET_ALARM_HR
+		sjmp set_alarm_cont1
+	set_alarm_cont0:
 
-	; Set the alarm hours
-	SET_ALARM_HR:
+	cjne a, #SET_ALARM_MIN_STATE, set_alarm_cont1
+		lcall SET_ALARM_MIN
+	set_alarm_cont1:
 
-		; Clear the TRANSITION_STATE? bit
-		clr TRANSITION_STATE?
+	; Check for timeout event
+	mov a, SECONDS
+	cjne a, TIMEOUT, set_alarm_cont2
+		lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE
+	set_alarm_cont2:
 
-		; Move in mask values
-		mov VFD_FLASH_MASK, #0FFh
-		mov NIX_FLASH_MASK, #0CFh
+	mov R1, #5Bh 		; move the address of ALARM_HOURS (*note: not ALARM_MINUTES) into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
+ret
 
-		; Set the upper and lower bounds
-		mov UPPER_BOUND, #17h 					; hours can be 23 max
-		mov LOWER_BOUND, #00h 					; hours can be 0 min
+; SET_ALARM:
+; 	clr ROT_FLAG									; clear the ROT_FLAG
+; 	clr INC_LEAP_YEAR? 								; clear the INC_LEAP_YEAR? flag
 
-		mov R0, #5Bh							; corresponds to memory address of ALARM_HOURS
+; 	; Set the alarm hours
+; 	SET_ALARM_HR:
 
-		set_alarm_hr_loop1:
+; 		; Clear the TRANSITION_STATE? bit
+; 		clr TRANSITION_STATE?
 
-		; Check for timeout event
-		mov a, SECONDS
-		cjne a, TIMEOUT, set_alarm_hr_cont2
-			lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE
-			ljmp MAIN
-		set_alarm_hr_cont2:
+; 		; Move in mask values
+; 		mov VFD_FLASH_MASK, #0FFh
+; 		mov NIX_FLASH_MASK, #0CFh
 
-		; check for a rotary encoder short press
-		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-		jnb TRANSITION_STATE?, set_alarm_hr_cont3
-			ljmp SET_ALARM_MIN 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-		set_alarm_hr_cont3:
+; 		; Set the upper and lower bounds
+; 		mov UPPER_BOUND, #17h 					; hours can be 23 max
+; 		mov LOWER_BOUND, #00h 					; hours can be 0 min
 
-		mov R1, #5Bh 		; move the address of ALARM_HOURS (*note: not ALARM_MINUTES) into R1 (for TWLV_TWFR_HOUR_ADJ)
-		lcall TWLV_TWFR_HOUR_ADJ
+; 		mov R0, #5Bh							; corresponds to memory address of ALARM_HOURS
 
-		sjmp set_alarm_hr_loop1
+; 		set_alarm_hr_loop1:
 
+; 		; Check for timeout event
+; 		mov a, SECONDS
+; 		cjne a, TIMEOUT, set_alarm_hr_cont2
+; 			lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE
+; 			ljmp set_alarm_min_cont4 				; jump to the end of routine
+; 		set_alarm_hr_cont2:
 
-	; Set the alarm minutes
-	SET_ALARM_MIN:
+; 		; check for a rotary encoder short press
+; 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+; 		jnb TRANSITION_STATE?, set_alarm_hr_cont3
+; 			ljmp SET_ALARM_MIN 						; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+; 		set_alarm_hr_cont3:
 
-		; Clear the TRANSITION_STATE? bit
-		clr TRANSITION_STATE?
+; 		mov R1, #5Bh 		; move the address of ALARM_HOURS (*note: not ALARM_MINUTES) into R1 (for TWLV_TWFR_HOUR_ADJ)
+; 		lcall TWLV_TWFR_HOUR_ADJ
 
-		; Move in mask values
-		mov VFD_FLASH_MASK, #0FFh
-		mov NIX_FLASH_MASK, #3Fh
-
-		; Set the upper and lower bounds
-		mov UPPER_BOUND, #3Bh 					; minutes can be 59 max
-		mov LOWER_BOUND, #00h 					; minutes can be 0 min
-
-		mov R0, #5Ch							; corresponds to memory address of ALARM_MINUTES
-
-		set_alarm_min_loop1:
-
-		; Check for timeout event
-		mov a, SECONDS
-		cjne a, TIMEOUT, set_alarm_min_cont2
-			lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE
-			ljmp MAIN
-		set_alarm_min_cont2:
-
-		; check for a rotary encoder short press
-		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-		jnb TRANSITION_STATE?, set_alarm_min_cont3
-			lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-			ljmp MAIN
-		set_alarm_min_cont3:
-
-		; Operations to dispay ALARM_MINUTES register in decimal format: MIN
-		mov a, ALARM_MINUTES
-		mov b, #0Ah
-		div ab
-		mov MIN_TENS, a
-		mov MIN_ONES, b
-
-		; Display ALARM_MINUTES:
-		mov NIX2, MIN_TENS
-		mov NIX1, MIN_ONES
-
-		; Update the hours if 12/24 hour switch is flipped
-		mov R1, #5Bh 		; move the address of ALARM_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
-		lcall TWLV_TWFR_HOUR_ADJ
-
-		sjmp set_alarm_min_loop1
-
-ljmp MAIN
+; 		sjmp set_alarm_hr_loop1
 
 
+; 	; Set the alarm minutes
+; 	SET_ALARM_MIN:
+
+; 		; Clear the TRANSITION_STATE? bit
+; 		clr TRANSITION_STATE?
+
+; 		; Move in mask values
+; 		mov VFD_FLASH_MASK, #0FFh
+; 		mov NIX_FLASH_MASK, #3Fh
+
+; 		; Set the upper and lower bounds
+; 		mov UPPER_BOUND, #3Bh 					; minutes can be 59 max
+; 		mov LOWER_BOUND, #00h 					; minutes can be 0 min
+
+; 		mov R0, #5Ch							; corresponds to memory address of ALARM_MINUTES
+
+; 		set_alarm_min_loop1:
+
+; 		; Check for timeout event
+; 		mov a, SECONDS
+; 		cjne a, TIMEOUT, set_alarm_min_cont2
+; 			lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE
+; 			ljmp set_alarm_min_cont4 				; jump to the end of routine
+; 		set_alarm_min_cont2:
+
+; 		; check for a rotary encoder short press
+; 		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+; 		jnb TRANSITION_STATE?, set_alarm_min_cont3
+; 			lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+; 			ljmp set_alarm_min_cont4 						; jump to the end of routine
+; 		set_alarm_min_cont3:
+
+; 		; Operations to dispay ALARM_MINUTES register in decimal format: MIN
+; 		mov a, ALARM_MINUTES
+; 		mov b, #0Ah
+; 		div ab
+; 		mov MIN_TENS, a
+; 		mov MIN_ONES, b
+
+; 		; Display ALARM_MINUTES:
+; 		mov NIX2, MIN_TENS
+; 		mov NIX1, MIN_ONES
+
+; 		; Update the hours if 12/24 hour switch is flipped
+; 		mov R1, #5Bh 		; move the address of ALARM_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+; 		lcall TWLV_TWFR_HOUR_ADJ
+
+; 		sjmp set_alarm_min_loop1
+
+; 		set_alarm_min_cont4: 			; has a sub-state machine, state variable SET_ALARM_SUB_STATE
+; ret
+
+; ===== Set Time Sub-State Functions =======
+
+SET_MM:
+	; Operations to dispay MONTH register in decimal format: MM
+	mov a, MONTH
+	mov b, #0Ah
+	div ab
+	mov MM_TENS, a
+	mov MM_ONES, b
+
+	; Display MONTH:
+	mov GRID8, MM_TENS
+	mov GRID7, MM_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, set_mm_cont3 
+		lcall SET_MM_STATE_TO_SET_DD_STATE	; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	set_mm_cont3:
+ret
+
+SET_DD:
+	; Operations to dispay DAY register in decimal format: DD
+	mov a, DAY
+	mov b, #0Ah
+	div ab
+	mov DD_TENS, a
+	mov DD_ONES, b
+
+	; Display DAY:
+	mov GRID5, DD_TENS
+	mov GRID4, DD_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, set_dd_cont3
+		lcall SET_DD_STATE_TO_SET_YY_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	set_dd_cont3:
+ret
+
+SET_YY:
+	; Operations to dispay YEAR register in decimal format: YY
+	mov a, YEAR
+	mov b, #0Ah
+	div ab
+	mov YY_TENS, a
+	mov YY_ONES, b
+
+	; Display YEAR:
+	mov GRID2, YY_TENS
+	mov GRID1, YY_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, set_yy_cont3
+		lcall SET_YY_STATE_TO_SET_HR_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	set_yy_cont3:
+ret
+
+SET_HR:
+	; HOURS gets written to display in TWLV_TWFR_HOUR_ADJ function, called in SET_TIME
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, set_hr_cont3
+		lcall SET_HR_STATE_TO_SET_MIN_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	set_hr_cont3:
+ret
+
+SET_MIN:
+	; Operations to dispay MINUTES register in decimal format: MIN
+	mov a, MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	; Display MINUTES:
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, set_min_cont3
+		lcall SET_TIME_STATE_TO_SHOW_TIME_STATE		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	set_min_cont3:
+ret
+
+; ========= Alarm State Functions ==========
+
+ALARM_ENABLED:
+	jnb P0.5, alarm_enabled_cont0 										; monitor the state of the alarm on/off switch
+																		; alarm is enabled if P0.5 is high
+		mov a, ALARM_HOURS												; check if time to fire the alarm
+		cjne a, HOURS, alarm_enabled_cont1 								; compare alarm hours to current hours
+			mov a, ALARM_MINUTES
+			cjne a, MINUTES, alarm_enabled_cont1 						; compare alarm minutes to current minutes
+				mov a, #00h
+				cjne a, SECONDS, alarm_enabled_cont1 					; compare current seconds to 0
+					; TODO:  check if we are in a set time or set alarm state, in which case don't fire the alarm (jump to alarm_enabled_cont1 )
+					lcall ALARM_ENABLED_STATE_TO_ALARM_FIRING_STATE 	; transition to alarm firing state
+					sjmp alarm_enabled_cont1
+
+	alarm_enabled_cont0: 												; alarm is disabled if P0.5 is low
+		lcall ALARM_ENABLED_STATE_TO_ALARM_DISABLED_STATE 				; transistion to alarm disabled state
+	alarm_enabled_cont1:
+ret
+
+ALARM_DISABLED:
+	jnb P0.5, alarm_disabled_cont0 										; monitor the state of the alarm on/off switch
+																		; alarm is enabled if P0.5 is high
+		lcall ALARM_DISABLED_STATE_TO_ALARM_ENABLED_STATE 				; transition to alarm enabled state
+	alarm_disabled_cont0:
+ret
+
+ALARM_FIRING:
+	; snooze events are detected in CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS, which calls ALARM_FIRING_STATE_TO_ALARM_SNOOZING_STATE
+	jb P0.5, alarm_firing_cont1 										; monitor the state of the alarm on/off switch
+		lcall ALARM_FIRING_STATE_TO_ALARM_DISABLED_STATE 				; alarm is disabled, so transistion to alarm disabled state
+	alarm_firing_cont1:
+ret
+
+ALARM_SNOOZING:
+	jnb P0.5, alarm_snoozing_cont0 										; monitor the state of the alarm on/off switch
+																		; alarm is enabled if P0.5 is high
+		mov a, SNOOZE_MINUTES 											; check if time to fire the alarm
+		cjne a, MINUTES, alarm_snoozing_cont1 							; compare snooze minutes to current minutes
+			mov a, #00h
+			cjne a, SECONDS, alarm_snoozing_cont1 						; compare current seconds to 0
+				; TODO:  don't actually fire the alarm if the clock is in SET_TIME_STATE or SET_ALARM_STATE
+				lcall ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE 		; transition to alarm firing state
+				sjmp alarm_snoozing_cont2
+
+	alarm_snoozing_cont0: 												; alarm is disabled if P0.5 is low
+		lcall ALARM_SNOOZING_STATE_TO_ALARM_DISABLED_STATE 				; transistion to alarm disabled state
+		sjmp alarm_snoozing_cont2
+
+	alarm_snoozing_cont1: 												; check if alarm or time has changed
+	; TODO:  FILL THIS IN -- if no time or alarm change, jump to alarm_snoozing_cont2 to keep snoozing
+		; lcall ALARM_SNOOZING_STATE_TO_ALARM_ENABLED_STATE
+
+	alarm_snoozing_cont2:
+ret
+
+; ===== Set Alarm Sub-State Functions ======
+SET_ALARM_HR:
+	; ALARM_HOURS gets written to display in TWLV_TWFR_HOUR_ADJ function, called in SET_ALARM
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, set_alarm_hr_cont3
+		lcall SET_ALARM_HR_STATE_TO_SET_ALARM_MIN_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	set_alarm_hr_cont3:
+ret
+
+SET_ALARM_MIN:
+	; Operations to dispay ALARM_MINUTES register in decimal format: MIN
+	mov a, ALARM_MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	; Display ALARM_MINUTES:
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, set_alarm_min_cont3
+		lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	set_alarm_min_cont3:
+ret
+
+; ==========================================
 
 TIMER_0_SERVICE:
 	
 	; push any used SFRs onto the stack to preserve their values
 	push acc
 	push PSW
+
+	; check if ALARM_STATE = ALARM_FIRING_STATE
+	mov a, ALARM_STATE
+	cjne a, #ALARM_FIRING_STATE, timer_0_service_cont3
+		cpl P1.1 			; toggle buzzer
+	timer_0_service_cont3:
 
 	inc SECONDS 			; increment the seconds
 	mov R6, SECONDS
@@ -766,7 +1070,7 @@ TIMER_0_SERVICE:
 
 		; check if in SET_TIME_STATE, in which case, don't roll the seconds over into the minutes
 		mov a, CLOCK_STATE
-		cjne a, SET_TIME_STATE, timer_0_service_cont2
+		cjne a, #SET_TIME_STATE, timer_0_service_cont2
 			ljmp timer_0_service_cont1
 		timer_0_service_cont2:
 
@@ -816,36 +1120,42 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 		clr BUTTON_FLAG					; if not, clear the encoder button flag
 	cont14:
 
-	mov a, CLOCK_STATE 					; move the CLOCK_STATE into the accumulator
-
-	jb BUTTON_FLAG, cont15			; check to make sure BUTTON_FLAG is cleared
-		jb P3.6, cont15					; check if rotary encoder button is pressed
+	jb BUTTON_FLAG, cont15					; check to make sure BUTTON_FLAG is cleared
+		jb P3.6, cont15						; check if rotary encoder button is pressed
 			mov R2, #0FFh					; load R2 for 255 counts
 			mov R3, #0FFh					; load R3 for 255 counts
 			loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed
 											; (also acts as debounce)
-				jb P3.6, cont15			; check if rotary encoder button is still pressed
+				jb P3.6, cont15				; check if rotary encoder button is still pressed
 				djnz R3, loop3				; decrement count in R3
 			mov R3, #0FFh					; reload R3 in case loop is needed again
-			cjne R2, #0E1h, cont16								; check if R2 has been decrement enough for a "short press"
+			cjne R2, #0E1h, cont16			; check if R2 has been decrement enough for a "short press"
+
+				mov a, ALARM_STATE 										; check if alarm is firing
+				cjne a, #ALARM_FIRING_STATE, cont20
+					; if ALARM_STATE = ALARM_FIRING_STATE:
+					lcall ALARM_FIRING_STATE_TO_ALARM_SNOOZING_STATE 	; snooze the alarm
+					ljmp cont19 			; jump to end and set BUTTON_FLAG
+				cont20: 					; alarm is not firing, so interpret rotary encoder activity for CLOCK_STATE transitions
 				; if there has been a rot enc short press, determine next state based on current state
-				cjne a, SHOW_TIME_STATE, cont17
+				mov a, CLOCK_STATE 					; move the CLOCK_STATE into the accumulator
+				cjne a, #SHOW_TIME_STATE, cont17
 					; if CLOCK_STATE = SHOW_TIME_STATE:
-					mov NEXT_CLOCK_STATE, SHOW_ALARM_STATE
+					mov NEXT_CLOCK_STATE, #SHOW_ALARM_STATE
 					ljmp cont16
 				cont17:
 				; only other possibility is that we are in SHOW_ALARM_STATE
-				mov NEXT_CLOCK_STATE, SHOW_TIME_STATE		
+				mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE		
 			cont16:
 			djnz R2, loop3					; count R3 down again until R2 counts down
 			; if there has been a rot enc long press, determine next state based on current state
-			cjne a, SHOW_TIME_STATE, cont18 
+			cjne a, #SHOW_TIME_STATE, cont18 
 				;if CLOCK_STATE = SHOW_TIME_STATE
-				mov NEXT_CLOCK_STATE, SET_TIME_STATE
+				mov NEXT_CLOCK_STATE, #SET_TIME_STATE
 				ljmp cont19
 			cont18:
 			; only other possibility is that we are in SHOW_ALARM_STATE
-			mov NEXT_CLOCK_STATE, SET_ALARM_STATE
+			mov NEXT_CLOCK_STATE, #SET_ALARM_STATE
 			cont19:
 			setb BUTTON_FLAG				; set the rotary encoder button flag
 	cont15:
@@ -855,8 +1165,13 @@ SET_TIME_STATE_TO_SHOW_TIME_STATE:
 	clr EX0						; disable external interrupt 0
 	clr EX1						; disable external interrupt 1
 
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	mov SECONDS, #00h 							; set seconds back to 0
+
 	; Change the clock state
-	mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
+	mov CLOCK_STATE, #SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
 	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
 	         									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
 ret
@@ -881,12 +1196,14 @@ SHOW_TIME_STATE_TO_SHOW_ALARM_STATE:
 	mov GRID1, #011h 	; "n"
 
 	; Update CLOCK_STATE
-	mov CLOCK_STATE, SHOW_ALARM_STATE
+	mov CLOCK_STATE, #SHOW_ALARM_STATE
 ret
 
 SHOW_TIME_STATE_TO_SET_TIME_STATE:
 	; set timeout (59 seconds)
 	lcall ADJUST_TIMEOUT
+
+	clr ROT_FLAG					; clear the ROT_FLAG
 
 	; initalize external interrupts for rotary encoder
 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
@@ -895,8 +1212,24 @@ SHOW_TIME_STATE_TO_SET_TIME_STATE:
 	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
 	setb EX1						; enable external interrupt 1
 
+	; Update SET_TIME_SUB_STATE
+	mov SET_TIME_SUB_STATE, #SET_MM_STATE
+
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	; Move in mask values
+	mov VFD_FLASH_MASK, #0FCh
+	mov NIX_FLASH_MASK, #0FFh
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #0Ch 					; months can be 12 max
+	mov LOWER_BOUND, #01h 					; months can be 1 min
+
+	mov R0, #4Ch							; corresponds to memory address of MONTH
+
 	; Update CLOCK_STATE
-	mov CLOCK_STATE, SET_TIME_STATE
+	mov CLOCK_STATE, #SET_TIME_STATE
 ret
 
 SHOW_ALARM_STATE_TO_SET_ALARM_STATE:
@@ -910,8 +1243,27 @@ SHOW_ALARM_STATE_TO_SET_ALARM_STATE:
 	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
 	setb EX1						; enable external interrupt 1
 
+	; Update SET_ALARM_SUB_STATE
+	mov SET_ALARM_SUB_STATE, #SET_ALARM_HR_STATE
+
+	clr ROT_FLAG					; clear the ROT_FLAG
+	clr INC_LEAP_YEAR? 				; clear the INC_LEAP_YEAR? flag
+
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	; Move in mask values
+	mov VFD_FLASH_MASK, #0FFh
+	mov NIX_FLASH_MASK, #0CFh
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #17h 					; hours can be 23 max
+	mov LOWER_BOUND, #00h 					; hours can be 0 min
+
+	mov R0, #5Bh							; corresponds to memory address of ALARM_HOURS
+
 	; Update CLOCK_STATE
-	mov CLOCK_STATE, SET_ALARM_STATE
+	mov CLOCK_STATE, #SET_ALARM_STATE
 ret
 
 SET_ALARM_STATE_TO_SHOW_ALARM_STATE:
@@ -929,7 +1281,7 @@ SET_ALARM_STATE_TO_SHOW_ALARM_STATE:
 	clr EX1						; disable external interrupt 1
 
 	; Update CLOCK_STATE
-	mov CLOCK_STATE, SHOW_ALARM_STATE
+	mov CLOCK_STATE, #SHOW_ALARM_STATE
 	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
 	         									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
 ret
@@ -940,8 +1292,140 @@ SHOW_ALARM_STATE_TO_SHOW_TIME_STATE:
 	mov GRID3, #0Ah 	; write dash to grid 3 for date
 
 	; Update CLOCK_STATE
-	mov CLOCK_STATE, SHOW_TIME_STATE
+	mov CLOCK_STATE, #SHOW_TIME_STATE
 ret
+
+ALARM_DISABLED_STATE_TO_ALARM_ENABLED_STATE:
+	setb P1.6 									; turn on alarm light
+	mov ALARM_STATE, #ALARM_ENABLED_STATE 		; update ALARM_STATE
+ret
+
+ALARM_ENABLED_STATE_TO_ALARM_DISABLED_STATE:
+	clr P1.6 									; turn off alarm light
+	mov ALARM_STATE, #ALARM_DISABLED_STATE 		; update ALARM_STATE
+ret
+
+ALARM_ENABLED_STATE_TO_ALARM_FIRING_STATE:
+	clr P1.1 									; turn on buzzer.  NOTE: inverter between pin and buzzer (low = buzzing)
+	mov ALARM_STATE, #ALARM_FIRING_STATE 		; update ALARM_STATE
+ret
+
+ALARM_FIRING_STATE_TO_ALARM_DISABLED_STATE:
+	setb P1.1 									; turn off buzzer.  NOTE: inverter between pin and buzzer (high = off)
+	clr P1.6 									; turn off alarm light
+	mov ALARM_STATE, #ALARM_DISABLED_STATE 		; update ALARM_STATE
+ret
+
+ALARM_FIRING_STATE_TO_ALARM_SNOOZING_STATE:
+	setb P1.1 									; turn off buzzer.  NOTE: inverter between pin and buzzer (high = off)
+	lcall SET_SNOOZE_ALARM 						; update the snooze time
+	mov ALARM_STATE, #ALARM_SNOOZING_STATE 		; update ALARM_STATE
+ret
+
+ALARM_SNOOZING_STATE_TO_ALARM_DISABLED_STATE:
+	clr P1.6 									; turn off alarm light
+	mov ALARM_STATE, #ALARM_DISABLED_STATE 		; update ALARM_STATE
+ret
+
+ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE:
+	clr P1.1 									; turn on buzzer.  NOTE: inverter between pin and buzzer (low = buzzing)
+	mov ALARM_STATE, #ALARM_FIRING_STATE 		; update ALARM_STATE
+ret
+
+ALARM_SNOOZING_STATE_TO_ALARM_ENABLED_STATE:
+	setb P1.6 									; turn on alarm light
+	mov ALARM_STATE, #ALARM_ENABLED_STATE 		; update ALARM_STATE
+ret
+
+; ========================================
+
+; ==== Sub-State Transition Functions ====
+SET_MM_STATE_TO_SET_DD_STATE:
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	; Move in mask values
+	mov VFD_FLASH_MASK, #0E7h
+	mov NIX_FLASH_MASK, #0FFh
+
+	; Upper and lower bounds set in DD_ADJ
+	lcall DD_ADJ							; adjust bounds so you can't set invalid date
+
+	mov R0, #4Dh							; corresponds to memory address of DAY
+
+	mov SET_TIME_SUB_STATE, #SET_DD_STATE 	; update SET_TIME_SUB_STATE
+ret
+
+SET_DD_STATE_TO_SET_YY_STATE:
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	; Move in mask values
+	mov VFD_FLASH_MASK, #3Fh
+	mov NIX_FLASH_MASK, #0FFh
+
+	; Upper and lower bounds set in YY_ADJ
+	lcall YY_ADJ							; adjust bounds so you can't set invalid date
+
+	mov R0, #4Eh							; corresponds to memory address of YEAR
+	
+	mov SET_TIME_SUB_STATE, #SET_YY_STATE 	; update SET_TIME_SUB_STATE
+ret
+
+SET_YY_STATE_TO_SET_HR_STATE:
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	; Move in mask values
+	mov VFD_FLASH_MASK, #0FFh
+	mov NIX_FLASH_MASK, #0CFh
+
+	; clear the leap year bit
+	clr INC_LEAP_YEAR?
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #17h 					; hours can be 23 max
+	mov LOWER_BOUND, #00h 					; hours can be 0 min
+
+	mov R0, #45h							; corresponds to memory address of HOURS
+	
+	mov SET_TIME_SUB_STATE, #SET_HR_STATE 	; update SET_TIME_SUB_STATE
+ret
+
+SET_HR_STATE_TO_SET_MIN_STATE:
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	; Move in mask values
+	mov VFD_FLASH_MASK, #0FFh
+	mov NIX_FLASH_MASK, #3Fh
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #3Bh 					; minutes can be 59 max
+	mov LOWER_BOUND, #00h 					; minutes can be 0 min
+
+	mov R0, #46h							; corresponds to memory address of MINUTES
+	
+	mov SET_TIME_SUB_STATE, #SET_MIN_STATE 	; update SET_TIME_SUB_STATE
+ret
+
+SET_ALARM_HR_STATE_TO_SET_ALARM_MIN_STATE:
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	; Move in mask values
+	mov VFD_FLASH_MASK, #0FFh
+	mov NIX_FLASH_MASK, #3Fh
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #3Bh 					; minutes can be 59 max
+	mov LOWER_BOUND, #00h 					; minutes can be 0 min
+
+	mov R0, #5Ch							; corresponds to memory address of ALARM_MINUTES
+
+	mov SET_ALARM_SUB_STATE, #SET_ALARM_MIN_STATE 	; update SET_TIME_SUB_STATE
+ret
+
 ; ========================================
 
 ; ====== Display Functions ======
@@ -961,12 +1445,12 @@ CHECK_TO_FLASH_DISPLAYS:
 	push acc
 
 	mov a, CLOCK_STATE										; move CLOCK_STATE into the accumulator
-	cjne a, SET_TIME_STATE, check_to_flash_displays_cont0	; check if in SET_TIME_STATE, otherwise skip this
+	cjne a, #SET_TIME_STATE, check_to_flash_displays_cont0	; check if in SET_TIME_STATE, otherwise skip this
 		lcall FLASH_DISPLAYS
 		ljmp check_to_flash_displays_cont3
 	check_to_flash_displays_cont0:
 
-	cjne a, SET_ALARM_STATE, check_to_flash_displays_cont1	; check if in SET_ALARM_STATE, otherwise skip this
+	cjne a, #SET_ALARM_STATE, check_to_flash_displays_cont1	; check if in SET_ALARM_STATE, otherwise skip this
 		lcall FLASH_DISPLAYS
 		ljmp check_to_flash_displays_cont3
 	check_to_flash_displays_cont1:
@@ -1795,6 +2279,21 @@ ADJUST_TIMEOUT:
 	add a, #3Bh 		; add 59 (dec) to the acc
 	div ab 				; divide a by b
 	mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+
+	pop b
+	pop acc
+ret
+
+SET_SNOOZE_ALARM:
+	push acc
+	push b
+
+	; set snooze minutes
+	mov a, MINUTES 			; move MINUTES into acc
+	mov b, #3Ch 		 	; move 60 (dec) into b
+	add a, SNOOZE_DURATION 	; add SNOOZE_DURATION to the acc
+	div ab 					; divide a by b
+	mov SNOOZE_MINUTES, b   ; move b (the remainder from above) into SNOOZE_MINUTES
 
 	pop b
 	pop acc
