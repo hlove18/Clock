@@ -105,7 +105,7 @@ INIT:
 
 	; ====== Decatron Variables ======
 	; bytes:
-	.equ DECA_SUB_STATE,		42h
+	.equ DECA_LOAD_STATE,		42h
 	.equ DECATRON,			43h
 	.equ DECATRON_BUFFER, 	44h
 	; bits:
@@ -294,9 +294,7 @@ MAIN:
 	cjne a, SET_TIME_STATE, main_cont1
 		ljmp SET_TIME
 	main_cont1:
-
-	sjmp MAIN
-
+sjmp MAIN
 
 SHOW_TIME:
 	; Split the month
@@ -375,11 +373,7 @@ SHOW_TIME:
 		; setb IT1						; make interrupt triggered on falling edge
 		mov CLOCK_STATE, SET_TIME_STATE	; change state to SET_TIME_STATE
 	cont14:
-
 ljmp MAIN
-
-
-
 
 SET_TIME:
 	; Disable 60/50Hz timing interrupt
@@ -758,7 +752,7 @@ SET_TIME:
 
 		mov SECONDS, #1Eh 						; set seconds back to 0
 		;mov DECATRON, SECONDS 					; move the seconds back into decatron
-		; mov DECA_SUB_STATE, #02h
+		; mov DECA_LOAD_STATE, #02h
 		; mov R4, #01h
 
 		;setb P0.4								; turn the decatron back on
@@ -774,10 +768,7 @@ SET_TIME:
 	; Change the clock state
 	mov CLOCK_STATE, SHOW_TIME_STATE			; change state to SHOW_TIME_STATE
 	lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, OR FLAHING WILL CONTINUE IN DECA_TRANSITION)
-
 ljmp MAIN
-
-
 
 TIMER_0_SERVICE:
 	
@@ -829,7 +820,6 @@ TIMER_0_SERVICE:
 	pop acc
 ret 			 			; exit
 
-
 UPDATE_DISPLAYS:
 	;lcall UPDATE_DECA					; update the decatron
 	lcall UPDATE_VFD					; update the VFD
@@ -841,7 +831,6 @@ UPDATE_DISPLAYS:
 		mov R5, #0Ch					; reset R5 with a value of 12
 	update_displays_cont0:
 ret
-
 
 FLASH_DISPLAYS:
 	push acc
@@ -872,8 +861,6 @@ FLASH_DISPLAYS:
 	flash_displays_cont1:
 	pop acc
 ret
-
-
 
 UPDATE_NIX:
 	; This function sequentially cycles through each nixie bulb and applies the appropriate
@@ -919,17 +906,13 @@ UPDATE_NIX:
 	pop PSW
 	pop acc
 	pop 1
-
 ret
-
 
 NIX_RESET:
 	; This function resets the nixie registers after a complete cycle
 	mov NIX_EN, #10h			; initialize nixie enable nibble
 	mov NIX_INDX, #3Eh 			; initalize nixie index (start with nixie 4). This should reflect the memory location of NIX4.
-
 ret
-
 
 UPDATE_VFD:
 	; This function squentially cycles through each VFD grid and applies the appropriate
@@ -1075,9 +1058,7 @@ UPDATE_VFD:
 	pop PSW
 	pop acc					; restore value of a to value before UPDATE_VFD was called
 	pop 1					; restore value of R1 to value before UPDATE_VFD was called
-
 ret
-
 
 VFD_RESET:
 	; This function resets the VFD registers after a complete cycle
@@ -1086,7 +1067,6 @@ VFD_RESET:
 	mov GRID_EN_1, #80h
 	mov GRID_EN_2, #00h
 	mov GRID_INDX, #33h 	; corresponds to memory location of GRID9
-
 ret
 
 ; DECATRON_STATE
@@ -1148,14 +1128,14 @@ DECA_RADAR:
 
 	setb P1.7
 
-	mov a, DECA_SUB_STATE
+	mov a, DECA_LOAD_STATE
 	
 	cjne a, #00h, deca_radar_cont0
 		setb P0.0								; turn on K0
 		setb P0.3								; turn on Kx
 		clr P0.1								; turn off G1
 		clr P0.2								; turn off G2
-		inc DECA_SUB_STATE
+		inc DECA_LOAD_STATE
 		ljmp deca_radar_cont2
 	deca_radar_cont0:
 
@@ -1164,7 +1144,7 @@ DECA_RADAR:
 		clr P0.0								; turn off K0
 		clr P0.3								; turn off Kx
 		clr P0.2								; turn off G2
-		inc DECA_SUB_STATE
+		inc DECA_LOAD_STATE
 		ljmp deca_radar_cont2
 	deca_radar_cont1:
 
@@ -1173,7 +1153,7 @@ DECA_RADAR:
 		clr P0.1								; turn off G1
 		clr P0.0								; turn off K0
 		clr P0.3								; turn off Kx
-		mov DECA_SUB_STATE, #00h
+		mov DECA_LOAD_STATE, #00h
 		ljmp deca_radar_cont2
 	deca_radar_cont2:
 
@@ -1183,14 +1163,14 @@ ret
 DECA_LOAD:
 	; This function sequentially cycles through any active (as dictated by DECATRON)
 	; decatron cathodes to ravel and unravel the appropriate number of seconds.
-	; DECA_SUB_STATE points to the next cathode (Kx, G1, or G2) that is to be illuminated.
+	; DECA_LOAD_STATE points to the next cathode (Kx, G1, or G2) that is to be illuminated.
 	; DECA_TOGGLE is called when the direction of the cathode swiping is to be flipped (R4 = 0).
 	; On a change of direction, the end cathode remains illuminated for the next cycle.
 	; DECA_FORWARDS? keeps track of the direction of the cathode swiping.
 	; DECATRON_BUFFER ensures the correct direction of raveling/unraveling.
 
 	; R4 stores the count of how many cathodes need to be lit up before switching directions.
-	; R3 stores DECA_SUB_STATE.
+	; R3 stores DECA_LOAD_STATE.
 
 	; push any used SFRs onto the stack to preserve their values
 	push 3
@@ -1203,7 +1183,7 @@ DECA_LOAD:
 	; 	setb DECA_RESET_CALLED?					; set DECA_RESET_CALLED? flag
 	; deca_load_cont0:
 
-	mov R3, DECA_SUB_STATE						; move DECA_SUB_STATE to R3
+	mov R3, DECA_LOAD_STATE						; move DECA_LOAD_STATE to R3
 
 	;============
 	mov a, DECATRON   							; move DECATRON into the accumulator
@@ -1239,52 +1219,52 @@ DECA_LOAD:
 		sjmp deca_load_cont6 					; exit
 	deca_load_cont1:
 
-	cjne R3, #00h, deca_load_cont2 			; if we are in DECA_SUB_STATE 0, jump the arc to G1
-		jb DECA_FORWARDS?, deca_load_cont3 	; check direction of swiping
+	cjne R3, #00h, deca_load_cont2 				; if we are in DECA_LOAD_STATE 0, jump the arc to G1
+		jb DECA_FORWARDS?, deca_load_cont3 		; check direction of swiping
 			; if swiping counter-clockwise
 			setb P0.1 							; pull G1 low (note inverter between 8051 pin and decatron)
 			clr P0.2							; pull G2 high (note inverter between 8051 pin and decatron)
-			mov DECA_SUB_STATE, #02h 				; DECA_SUB_STATE: 0 --> 2
+			mov DECA_LOAD_STATE, #02h 			; DECA_LOAD_STATE: 0 --> 2
 			sjmp deca_load_cont6 				; exit
 		deca_load_cont3:
 		; if swiping clockwise
 		setb P0.1 								; pull G1 low (note inverter between 8051 pin and decatron)
 		clr P0.3 								; pull Kx high (note inverter between 8051 pin and decatron)
 		clr P0.0 								; pull K0 high (note inverter between 8051 pin and decatron)
-		inc DECA_SUB_STATE 							; DECA_SUB_STATE:  0 --> 1
+		inc DECA_LOAD_STATE 					; DECA_LOAD_STATE:  0 --> 1
 		sjmp deca_load_cont6 					; exit
 	deca_load_cont2:
 
-	cjne R3, #01h, deca_load_cont4 			; if we are in DECA_SUB_STATE 1, jump the arc to G2
+	cjne R3, #01h, deca_load_cont4 			; if we are in DECA_LOAD_STATE 1, jump the arc to G2
 		jb DECA_FORWARDS?, deca_load_cont5 	; check direction of swiping
 			; if swiping counter-clockwise
 			setb P0.2 							; pull G2 low (note inverter between 8051 pin and decatron)
 			clr P0.3 							; pull Kx high (note inverter between 8051 pin and decatron)
 			clr P0.0 							; pull K0 high (note inverter between 8051 pin and decatron)
-			dec DECA_SUB_STATE 						; DECA_SUB_STATE:  1 --> 0
+			dec DECA_LOAD_STATE 						; DECA_LOAD_STATE:  1 --> 0
 			sjmp deca_load_cont6 				; exit
 		deca_load_cont5:
 		; if swiping clockwise
 		setb P0.2 								; pull G2 low (note inverter between 8051 pin and decatron)
 		clr P0.1 								; pull G1 high (note inverter between 8051 pin and decatron)
-		inc DECA_SUB_STATE 							; DECA_SUB_STATE:  1 --> 2
+		inc DECA_LOAD_STATE 							; DECA_LOAD_STATE:  1 --> 2
 		sjmp deca_load_cont6 					; exit
 	deca_load_cont4:
 
-	cjne R3, #02h, deca_load_cont6 			; if we are in DECA_SUB_STATE 2, jump the arc to Kx
+	cjne R3, #02h, deca_load_cont6 			; if we are in DECA_LOAD_STATE 2, jump the arc to Kx
 		jb DECA_FORWARDS?, deca_load_cont7 	; check direction of swiping
 			; if swiping counter-clockwise
 			setb P0.3 							; pull Kx low (note inverter between 8051 pin and decatron)
 			setb P0.0 							; pull K0 low (note inverter between 8051 pin and decatron)
 			clr P0.1 							; pull G1 high (note inverter between 8051 pin and decatron)
-			dec DECA_SUB_STATE 						; DECA_SUB_STATE:  2 --> 1
+			dec DECA_LOAD_STATE 						; DECA_LOAD_STATE:  2 --> 1
 			sjmp deca_load_cont6 				; exit
 		deca_load_cont7:
 		; if swiping clockwise
 		setb P0.3 								; pull Kx low (note inverter between 8051 pin and decatron)
 		setb P0.0 								; pull K0 low (note inverter between 8051 pin and decatron)
 		clr P0.2 								; pull G2 high (note inverter between 8051 pin and decatron)
-		mov DECA_SUB_STATE, #00h 					; DECA_SUB_STATE:  2 --> 0
+		mov DECA_LOAD_STATE, #00h 					; DECA_LOAD_STATE:  2 --> 0
 		sjmp deca_load_cont6 					; exit
 	deca_load_cont6:
 
@@ -1293,21 +1273,19 @@ DECA_LOAD:
 	pop acc
 	; pop 4
 	pop 3
-	
 ret
-
 
 DECA_TOGGLE:
 	; This function is called from UPDATE_DECA whenever the swiping direction has to change.
-	; If going from forward to backwards, DECA_SUB_STATE is decremented by 2 (incremented by 1) (mod 3).
-	; If going from backwards to forward, DECA_SUB_STATE is incremented by 2 (decremented by 1) (mod 3).
+	; If going from forward to backwards, DECA_LOAD_STATE is decremented by 2 (incremented by 1) (mod 3).
+	; If going from backwards to forward, DECA_LOAD_STATE is incremented by 2 (decremented by 1) (mod 3).
 	; DECA_FORWARDS? is a bit that keeps track of swiping direction.
 	; DECA_FORWARDS? = 1 when swiping is clockwise, = 0 when swiping is counter-clockwise.
 	; DECATRON_BUFFER is loaded with the latest DECATRON count when swiping in the appropriate direction.
 	; This prevents erratic raveling/unraveling patterns.
 
 	; R4 stores the count of how many cathodes need to be lit up before switching directions.
-	; R3 stores DECA_SUB_STATE.
+	; R3 stores DECA_LOAD_STATE.
 
 	; No need to push SFRs onto the stack because this function is called only from UPDATE_DECA, which
 	; does the pushing/popping.
@@ -1355,13 +1333,13 @@ DECA_TOGGLE:
 		; if seconds are less than or equal to 30:
 		mov R4, DECATRON_BUFFER 				; reload R4 with DECATRON_BUFFER  (this prevents erratic raveling)
 
-		; update the DECA_SUB_STATE
-		mov R3, DECA_SUB_STATE 						; move DECA_SUB_STATE into R3
+		; update the DECA_LOAD_STATE
+		mov R3, DECA_LOAD_STATE 						; move DECA_LOAD_STATE into R3
 		inc R3 									; increment R3 (same as decrementing twice after mod 3)
-		cjne R3, #03h, deca_toggle_cont4 		; check if DECA_SUB_STATE needs to roll over from 3 to 0
-			mov R3, #00h 						; if DECA_SUB_STATE = 3, set it to 0
+		cjne R3, #03h, deca_toggle_cont4 		; check if DECA_LOAD_STATE needs to roll over from 3 to 0
+			mov R3, #00h 						; if DECA_LOAD_STATE = 3, set it to 0
 		deca_toggle_cont4:
-		mov DECA_SUB_STATE, R3 						; update DECA_SUB_STATE
+		mov DECA_LOAD_STATE, R3 						; update DECA_LOAD_STATE
 		sjmp deca_toggle_cont1 					; exit ("ret" did work here, but changed to sjmp in case of monkey business...)
 
 	deca_toggle_cont2:
@@ -1369,7 +1347,7 @@ DECA_TOGGLE:
 	jnc deca_toggle_cont5 						; if the carry flag is set, DECATRON > 30
 		; if seconds are greater than 30
 		mov R4, DECATRON_BUFFER 				; move DECATRON_BUFFER into R4 (this prevents erratic unraveling)
-		sjmp deca_toggle_cont6 					; jump to update DECA_SUB_STATE
+		sjmp deca_toggle_cont6 					; jump to update DECA_LOAD_STATE
 
 	deca_toggle_cont5:
 	; if seconds are less than or equal to 30:
@@ -1377,22 +1355,20 @@ DECA_TOGGLE:
 	mov DECATRON_BUFFER, DECATRON 				; update the DECATRON_BUFFER with DECATRON
 
 	deca_toggle_cont6:
-	; update the DECA_SUB_STATE
-	mov R3, DECA_SUB_STATE 							; move DECA_SUB_STATE into R3
+	; update the DECA_LOAD_STATE
+	mov R3, DECA_LOAD_STATE 							; move DECA_LOAD_STATE into R3
 	dec R3 										; decrement R3 (same as incrementing twice after mod 3)
-	cjne R3, #0FFh, deca_toggle_cont7 			; check if DECA_SUB_STATE needs to wrap around from 255 to 2
-		mov R3, #02h 							; if DECA_SUB_STATE = 255, set it to 2
+	cjne R3, #0FFh, deca_toggle_cont7 			; check if DECA_LOAD_STATE needs to wrap around from 255 to 2
+		mov R3, #02h 							; if DECA_LOAD_STATE = 255, set it to 2
 	deca_toggle_cont7:
 
-	mov DECA_SUB_STATE, R3 							; update DECA_SUB_STATE
+	mov DECA_LOAD_STATE, R3 							; update DECA_LOAD_STATE
 
 	deca_toggle_cont1:
-
 ret 											; exit
 
-
 DECA_RESET:
-	mov DECA_SUB_STATE, #00h   			; initialize the decatron
+	mov DECA_LOAD_STATE, #00h   			; initialize the decatron
 
 	mov R4, DECATRON     			; initialize R4
 	mov DECATRON_BUFFER, DECATRON   ; reset the decatron DECATRON_BUFFER (!!! Important or the decatron will flash - reason for decatron bug after
@@ -1435,9 +1411,7 @@ DECA_TRANSITION:
 
 	ljmp deca_transition_loop 						; loop
 	deca_transition_cont1:
-
 ret
-
 
 ENC_A:
 	; push any used SFRs onto the stack to preserve their values
@@ -1585,7 +1559,6 @@ TWLV_TWFR_HOUR_ADJ:
 	pop b
 	pop PSW
 	pop acc
-
 ret
 
 SHORT_DELAY:
