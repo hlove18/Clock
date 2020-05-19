@@ -751,7 +751,13 @@ TIMER_0_SERVICE:
 	; if DECA_STATE is DECA_FAST_STATE, increment DECATRON with every 60Hz interrupt
 	mov a, DECA_STATE
 	cjne a, #DECA_FAST_STATE, timer_0_service_cont4
+		
+		; it is possible for DECATRON to wrap around 60 before it matches SECONDS, so roll over DECATRON if needed
 		inc DECATRON
+		mov a, DECATRON
+		cjne a, #3Ch, timer_0_service_cont5 					; check if DECATRON = 60 (dec)
+			mov DECATRON, #00h 									; move 0 into DECATRON
+		timer_0_service_cont5:
 
 		; check if in DECA_FILL_UP_STATE (e.g. transitioning from SET_ALARM_STATE to SHOW_ALARM_STATE)
 		jnb DECA_IN_TRANSITION?, timer_0_service_cont8
@@ -760,12 +766,6 @@ TIMER_0_SERVICE:
 				lcall ENTER_DECA_COUNTING_SECONDS_STATE 		; transition to DECA_COUNTING_SECONDS_STATE
 				clr DECA_IN_TRANSITION? 						; clear the transition bit
 		timer_0_service_cont8:
-
-		; it is possible for DECATRON to wrap around 60 before it matches SECONDS, so roll over DECATRON if needed
-		mov a, DECATRON
-		cjne a, #3Ch, timer_0_service_cont5 					; check if DECATRON = 60 (dec)
-			mov DECATRON, #00h 									; move 0 into DECATRON
-		timer_0_service_cont5:
 
 	timer_0_service_cont4:
 	djnz TIMER_0_POST_SCALER, timer_0_service_cont1
