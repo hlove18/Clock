@@ -141,7 +141,7 @@ ljmp MAIN
 
 GPS_OBTAIN_FIX_INIT:
 	; Use timer 0 for GPS "FIX" pin (in the main clock program, timer 0 is used to update time - i.e. count seconds.  This is not needed during sync)
-	; User timer 1 for baud rate generation.
+	; Use timer 1 for ~2 min timeout
 
 	; Interrupt initialization
 	setb EA 				; enable interrupts
@@ -158,7 +158,7 @@ GPS_OBTAIN_FIX_INIT:
 	; Initialize TL1 and TH1 for timer 1 16 bit timing for maximum count
 	mov TL1, #00h
 	mov TH1, #00h
-	; start timer 0
+	; Start timer 0
 	setb TR0
 	; Start timer 1
 	setb TR1

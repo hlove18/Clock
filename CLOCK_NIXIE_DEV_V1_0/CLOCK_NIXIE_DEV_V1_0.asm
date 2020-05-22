@@ -27,6 +27,12 @@ ENC_B_ISR:
 	lcall ENC_B
 reti
 
+; Timer 1 interrupt
+.org 001Bh
+TIMER_1_ISR:
+	lcall TIMER_1_SERVICE 		; update the time
+reti 							; exit
+
 ; Timer 2 interrupt
 .org 002Bh
 DISPLAY_ISR:
@@ -83,6 +89,92 @@ INIT:
 	SET_ALARM_HR_STATE equ 1
 	SET_ALARM_MIN_STATE equ 2
 	mov SET_ALARM_SUB_STATE, #SET_ALARM_HR_STATE
+
+	; ========== GPS Variables =================
+	; disable the GPS
+	clr P1.2
+	; Pull P1.3 HIGH (input used for GPS fix)
+	setb P1.3
+
+	; GPS Sync Sub-State Variable:
+	.equ GPS_SYNC_SUB_STATE, 77h
+
+	GPS_OBTAIN_FIX_STATE equ 1
+	GPS_OBTAIN_DATA_STATE equ 2
+	GPS_SET_TIMEZONE_STATE equ 3
+	mov GPS_SYNC_SUB_STATE, #GPS_OBTAIN_FIX_STATE
+
+	; GPS Obtain Data Sub-State Variable:
+	.equ GPS_OBTAIN_DATA_SUB_STATE, 76h
+	.equ GPS_OBTAIN_DATA_NEXT_SUB_STATE, 75h
+
+	GPS_WAIT equ 1
+	GPS_WAIT_FOR_DOLLAR equ 2
+	GPS_WAIT_FOR_G equ 3
+	GPS_WAIT_FOR_P equ 4
+	GPS_WAIT_FOR_R equ 5
+	GPS_WAIT_FOR_M equ 6
+	GPS_WAIT_FOR_C equ 7
+	GPS_WAIT_FOR_TIME equ 8
+	GPS_WAIT_FOR_A equ 9
+	GPS_WAIT_FOR_LATITUDE equ 10
+	GPS_WAIT_FOR_LONGITUDE equ 11
+	GPS_WAIT_FOR_DATE equ 12
+	GPS_WAIT_FOR_STAR equ 13
+	GPS_WAIT_FOR_CHECKSUM equ 14
+	mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_DOLLAR
+	mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_G
+
+	.equ GPS_FIX_LPF, 72h
+	.equ CALCULATED_GPS_CHECKSUM, 73h
+	.equ GPS_WAIT_TIME, 74h
+
+	; ====== Received GPS Variables ======
+	; !!!!!!! IMPORTANT: DO NOT MOVE THESE MEMORY LOCATIONS (pointers are used to update)
+	; Time
+	.equ RECEIVED_GPS_HRS_TENS,					08h 		; data stored here is in hex!
+	.equ RECEIVED_GPS_HRS_ONES,					09h			; data stored here is in hex!
+	.equ RECEIVED_GPS_MINS_TENS,				0Ah			; data stored here is in hex!
+	.equ RECEIVED_GPS_MINS_ONES,				0Bh			; data stored here is in hex!
+	.equ RECEIVED_GPS_SECS_TENS,				0Ch			; data stored here is in hex!
+	.equ RECEIVED_GPS_SECS_ONES,				0Dh			; data stored here is in hex!
+
+	; Note:  not saving latitude and longitude data
+	; ; Latitude
+	; .equ RECEIVED_GPS_LAT_DEGS_TENS,			XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LAT_DEGS_ONES,			XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LAT_MINS_TENS,			XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LAT_MINS_ONES,			XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LAT_MINS_TENTHS,		XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LAT_MINS_HNDRTHS,		XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LAT_MINS_THSNDTHS,		XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LAT_MINS_TEN_THSNDTHS,	XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LAT_DIRECTION,			XXh			; data stored here is in ASCII! (either "N" for North, or "S" for South)
+
+	; ; Longitude
+	; .equ RECEIVED_GPS_LONG_DEGS_HNDRS,		XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LONG_DEGS_TENS,			XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LONG_DEGS_ONES,			XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LONG_MINS_TENS,			XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LONG_MINS_ONES,			XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LONG_MINS_TENTHS,		XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LONG_MINS_HNDRTHS,		XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LONG_MINS_THSNDTHS,		XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LONG_MINS_TEN_THSNDTHS,	XXh			; data stored here is in hex!
+	; .equ RECEIVED_GPS_LONG_DIRECTION,			XXh			; data stored here is in ASCII! (either "E" for East, or "W" for West)
+
+	; Date
+	.equ RECEIVED_GPS_DAY_TENS,					0Eh 		; data stored here is in hex!
+	.equ RECEIVED_GPS_DAY_ONES,					0Fh			; data stored here is in hex!
+	.equ RECEIVED_GPS_MONTH_TENS,				10h			; data stored here is in hex!
+	.equ RECEIVED_GPS_MONTH_ONES,				11h			; data stored here is in hex!
+	.equ RECEIVED_GPS_YEAR_TENS,				12h			; data stored here is in hex!
+	.equ RECEIVED_GPS_YEAR_ONES,				13h			; data stored here is in hex!
+
+	; Checksum 
+	.equ RECEIVED_GPS_CHECKSUM,					14h			; data stored here is in hex!
+
+; =============================
 
 	; Alarm State Variable:
 	.equ ALARM_STATE, 7Eh
@@ -253,7 +345,7 @@ INIT:
 	mov YEAR, 	#14h
 	; ============================
 
-	; ====== Flash Variables ======
+	; ====== Display Variables ======
 	.equ VFD_FLASH_MASK,	57h
 	.equ NIX_FLASH_MASK,	58h
 
@@ -266,6 +358,12 @@ INIT:
 
 	mov VFD_MASK, #0FFh
 	mov NIX_MASK, #0FFh
+
+	; bits:
+	.equ VFD_PAUSED?, 23h.0
+
+	; Fill in with values
+	clr VFD_PAUSED?
 	; ============================
 
 	; ====== Alarm Variables ======
@@ -830,7 +928,7 @@ TIMER_0_SERVICE:
 	; ===========================================================
 	; Check if DECA_STATE = DECA_COUNTDOWN_STATE
 	mov a, DECA_STATE
-	cjne a, #DECA_COUNTDOWN_STATE, timer_0_service_cont9
+	cjne a, #DECA_COUNTDOWN_STATE, timer_0_service_cont8
 		; if DECA_STATE is DECA_COUNTDOWN_STATE, decrement SNOOZE_COUNT_PER_DECA_PIN each second
 		djnz SNOOZE_COUNT_PER_DECA_PIN, timer_0_service_cont8
 			mov SNOOZE_COUNT_PER_DECA_PIN, SNOOZE_COUNT_PER_DECA_PIN_RELOAD 	; reload SNOOZE_COUNT_PER_DECA_PIN
@@ -839,6 +937,17 @@ TIMER_0_SERVICE:
 				lcall ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE 				; fire alarm
 		timer_0_service_cont8:
 
+	; ===========================================================
+	; Check if DECA_STATE = DECA_RADAR_STATE
+	mov a, DECA_STATE
+	cjne a, #DECA_RADAR_STATE, timer_0_service_cont9
+		; if DECA_STATE is DECA_RADAR_STATE, increment DECA_LOAD_STATE, or reset to 0 if it equals 2
+		mov a, DECA_LOAD_STATE
+		cjne a, #02h, timer_0_service_cont13
+			mov DECA_LOAD_STATE, #00h
+			sjmp timer_0_service_cont9
+		timer_0_service_cont13:
+		inc DECA_LOAD_STATE
 	timer_0_service_cont9:
 
 	; ===========================================================
@@ -886,6 +995,24 @@ TIMER_0_SERVICE:
 	pop 6
 	pop PSW
 	pop acc
+ret
+
+TIMER_1_SERVICE:
+	; Reset timer 1
+	; Initialize TL1 and TH1 for timer 1 16 bit timing for maximum count
+	mov TL1, #00h
+	mov TH1, #00h
+
+	jnb P1.3, timer_1_service_cont0		; check if GPS fix is HIGH/LOW
+		; if GPS fix is high
+		mov GPS_FIX_LPF, #14h			; if GPS fix his HIGH (i.e. no GPS fix), reload GPS_FIX_LPF with 20 (decimal)
+		ljmp timer_1_service_cont1		; jump to the end of the ISR
+	timer_1_service_cont0:
+		; if GPS fix is low:
+		djnz GPS_FIX_LPF, timer_1_service_cont1
+			; GPS fix has been low for more than ~1.3 seconds
+			lcall ENTER_GPS_OBTAIN_DATA_STATE
+	timer_1_service_cont1:
 ret
 
 ; ====== State Transition Functions ======
@@ -1112,23 +1239,71 @@ SHOW_ALARM_STATE_TO_SHOW_TIME_STATE:
 ret
 
 ENTER_GPS_SYNC_STATE:
-	; set timeout (xxx seconds)
+	; set timeout (120 seconds)
+	mov TIMEOUT_LENGTH, #78h
+	mov TIMEOUT, TIMEOUT_LENGTH
 	
 	; have VFD display all dashes
+	setb VFD_PAUSED? 			; pause the VFD
+	; Byte 1 (GRID_EN_1):
+	; | grid 9 | 0 | 0 | 0 | lost | lost | lost | lost |
+	; Byte 2 (GRID_EN_2):
+	; | grid 1 | grid 2 | grid 3 | grid 4 | grid 5 | grid 6 | grid 7 | grid 8 |
+	; Byte 3:
+	; | a | b | c | d | e | f | g | dp |
+	; The first two bytes of serial data enable VFD grids (keep grid 9 off)
+	; Send the first byte (blank grid 9)
+	mov SBUF, #00h 				; send the first byte down the serial line
+	jnb TI, $ 					; wait for the entire byte to be sent
+	clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	; Send the second byte (turn on grids 1-8)
+	mov SBUF, #0FFh				; send the second byte down the serial line
+	jnb TI, $ 					; wait for the entire byte to be sent
+	clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	; Write "-" to all the displays that are enabled
+	mov SBUF, #02h				; send the third byte down the serial line
+	jnb TI, $ 					; wait for the entire byte to be sent
+	clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	; Load and latch the data
+	setb P3.5						; load the MAX6921
+	clr P3.5						; latch the MAX6921
 
 	; put decatron into DECA_RADAR_STATE
+	lcall ENTER_DECA_RADAR_STATE
 
 	; make serial ISR highest priority
+	; DO THIS IN OBTAIN DATA INIT
 
-	; enter GPS_OBTAIN_FIX_STATE:
-		; == GPS OBTAIN FIX
-		; Timer 0 keeps track of time (for timeout) and also does radar mode
-		; Timer 1 is configured to LPF GPS fix signal to detect when a fix is found
-		; Timer 2 does update displays
+	; This is how to configure timers going into GPS_OBTAIN_FIX_STATE:
+		; [x] Timer 0 keeps track of time (for timeout) and also does radar mode
+		; [x] Timer 1 is configured to LPF GPS fix signal to detect when a fix is found
+		; [x] Timer 2 does update displays
+
+	; Configure timer 1 in 16 bit mode (NOT auto-reload) - For counting GPS fix LOW level duration (when GPS has a fix, GPS fix pin is constantly low)
+	; Interrupt initialization
+	setb ET1				; enable timer 1 overflow Interrupt
+	; Do not change timer 0 settings (still used for keeping track of time (for timeout) and radar mode)
+	; NOTE: high nibble of TMOD is for timer 1, low nibble is for timer 0
+	mov TMOD, #16h
+	; Initialize TL1 and TH1 for timer 1 16 bit timing for maximum count
+	mov TL1, #00h
+	mov TH1, #00h
+	; Start timer 1
+	setb TR1
+	; Initialize GPS_FIX_LPF to keep track of how many times timer 1 has counted to 65536 (for LPF of GPS fix)
+	mov GPS_FIX_LPF, #14h	; move 20 (decimal) into GPS_FIX_LPF (20 * 0.065536 seconds = ~1.31 seconds)
 
 	; turn off GPS sync indicator
+	clr P1.7
+
+	; enable the GPS
+	setb P1.2
+
+	; update GPS_SYNC_SUB_STATE
+	mov GPS_SYNC_SUB_STATE, #GPS_OBTAIN_FIX_STATE
 
 	; update CLOCK_STATE
+	mov CLOCK_STATE, #GPS_SYNC_STATE
 ret
 
 ; Alarm state machine transitions ========
@@ -1292,7 +1467,9 @@ ret
 ; =========== Display Functions ==========
 UPDATE_DISPLAYS:
 	lcall UPDATE_DECA					; update the decatron
-	lcall UPDATE_VFD					; update the VFD
+	jb VFD_PAUSED?, update_displays_cont1 	; if VFD_PAUSED? = 1, do not update VFD
+		lcall UPDATE_VFD					; update the VFD
+	update_displays_cont1:
 
 	; ISSUE?
 	djnz R5, update_displays_cont0		; decrement the display update count, if it is zero, update the nixies
@@ -1895,8 +2072,6 @@ ret
 DECA_RADAR:
 	push acc
 
-	setb P1.7
-
 	mov a, DECA_LOAD_STATE
 	
 	cjne a, #00h, deca_radar_cont0
@@ -1904,7 +2079,7 @@ DECA_RADAR:
 		setb P0.3								; turn on Kx
 		clr P0.1								; turn off G1
 		clr P0.2								; turn off G2
-		inc DECA_LOAD_STATE
+		; inc DECA_LOAD_STATE
 		ljmp deca_radar_cont2
 	deca_radar_cont0:
 
@@ -1913,7 +2088,7 @@ DECA_RADAR:
 		clr P0.0								; turn off K0
 		clr P0.3								; turn off Kx
 		clr P0.2								; turn off G2
-		inc DECA_LOAD_STATE
+		; inc DECA_LOAD_STATE
 		ljmp deca_radar_cont2
 	deca_radar_cont1:
 
@@ -1922,7 +2097,7 @@ DECA_RADAR:
 		clr P0.1								; turn off G1
 		clr P0.0								; turn off K0
 		clr P0.3								; turn off Kx
-		mov DECA_LOAD_STATE, #00h
+		; mov DECA_LOAD_STATE, #00h
 		ljmp deca_radar_cont2
 	deca_radar_cont2:
 
@@ -1975,9 +2150,14 @@ ENTER_DECA_SCROLLING_STATE:
 ret
 
 ENTER_DECA_RADAR_STATE:
-	; make Timer 0 ISR fire at 60Hz
-	lcall DECA_RESET 									; call DECA_RESET (to position decatron at K0)
-	mov DECA_STATE, #DECA_RADAR_STATE 					; update decatron state variable
+	; Make Timer 0 ISR fire at 60Hz (or 50Hz depending on AC mains frequency)
+	mov TL0, #0FFh
+	mov TH0, #0FFh
+	mov TIMER_0_POST_SCALER, #3Ch 			; update TIMER_0_POST_SCALER (60 dec)
+	mov TIMER_0_POST_SCALER_RELOAD, #3Ch 	; update TIMER_0_POST_SCALER_RELOAD
+
+	lcall DECA_RESET 						; call DECA_RESET (to position decatron at K0)
+	mov DECA_STATE, #DECA_RADAR_STATE 		; update decatron state variable
 ret
 
 ENTER_DECA_COUNTDOWN_STATE:
