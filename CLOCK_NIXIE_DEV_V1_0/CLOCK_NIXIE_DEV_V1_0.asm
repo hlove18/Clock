@@ -174,6 +174,7 @@ INIT:
 	.equ DECA_FORWARDS?, 		20h.0
 	.equ DECA_RESET_CALLED?, 	20h.1
 	.equ DECA_IN_TRANSITION?, 	20h.2
+	.equ TO_COUNTDOWN?, 		20h.3
 
 	; Fill in with values
 	mov DECATRON, #00h
@@ -181,6 +182,7 @@ INIT:
 	mov TIMER_0_POST_SCALER, #01h
 	clr DECA_RESET_CALLED?
 	clr DECA_IN_TRANSITION?
+	clr TO_COUNTDOWN?
 	; ===============================
 
 	; ====== Rotary Encoder Variables ======
@@ -268,14 +270,31 @@ INIT:
 	; ====== Alarm Variables ======
 	.equ ALARM_HOURS,		5Bh
 	.equ ALARM_MINUTES,		5Ch
-	.equ SNOOZE_MINUTES,	5Dh
+	; .equ SNOOZE_MINUTES,	5Dh
 	.equ SNOOZE_DURATION, 	5Eh
+	.equ SNOOZE_COUNT_PER_DECA_PIN, 61h
+	.equ SNOOZE_COUNT_PER_DECA_PIN_RELOAD, 62h
 
 	; Initialize alarm
 	mov ALARM_HOURS, #00h
 	mov ALARM_MINUTES, #05h
-	mov SNOOZE_MINUTES, #05h
-	mov SNOOZE_DURATION, #01h
+	; mov SNOOZE_MINUTES, #05h
+	mov SNOOZE_DURATION, #01h 	; snooze duration in minutes
+
+	; The following block initializes two variables to take care of the DECA_COUNTDOWN_STATE behavior.
+	; Since the decatron has 30 pins, to count down from 30 to 0 during ALARM_SNOOZING_STATE, each pin will stay illuminated (in
+	; seconds) for 2 times the SNOOZE_DURATION (in minutes).
+	; E.g., if SNOOZE_DURATION is 1 minute, each of the decatron pins will stay lit for 2 seconds.
+	; Another e.g., if SNOOZE_DURATION is 10 minutes, each of the decatron pins will stay lit for 20 seconds.
+	; SNOOZE_COUNT_PER_DECA_PIN_RELOAD contains this number of seconds, calculated as twice SNOOZE_DURATION.
+	; SNOOZE_COUNT_PER_DECA_PIN initially starts with this reload value, but will be decremented in the TIMER_0_SERVICE with each
+	; second, then reloaded with SNOOZE_COUNT_PER_DECA_PIN_RELOAD when it reaches 0.
+	; 
+	; TODO:  redo this calculation when changing SNOOZE_DURATION in the settings menu.
+	mov a, SNOOZE_DURATION
+	add a, SNOOZE_DURATION
+	mov SNOOZE_COUNT_PER_DECA_PIN_RELOAD, a
+	mov SNOOZE_COUNT_PER_DECA_PIN, SNOOZE_COUNT_PER_DECA_PIN_RELOAD
 	; ============================
 
 	; Clear the carry flag
@@ -688,23 +707,24 @@ ALARM_FIRING:
 ret
 
 ALARM_SNOOZING:
-	jnb P0.5, alarm_snoozing_cont0 										; monitor the state of the alarm on/off switch
-																		; alarm is enabled if P0.5 is high
-		mov a, SNOOZE_MINUTES 											; check if time to fire the alarm
-		cjne a, MINUTES, alarm_snoozing_cont1 							; compare snooze minutes to current minutes
-			mov a, #00h
-			cjne a, SECONDS, alarm_snoozing_cont1 						; compare current seconds to 0
-				; TODO:  don't actually fire the alarm if the clock is in SET_TIME_STATE or SET_ALARM_STATE
-				lcall ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE 		; transition to alarm firing state
-				sjmp alarm_snoozing_cont2
+	jb P0.5, alarm_snoozing_cont2
+	; jnb P0.5, alarm_snoozing_cont0 										; monitor the state of the alarm on/off switch
+	; 																	; alarm is enabled if P0.5 is high
+	; 	mov a, SNOOZE_MINUTES 											; check if time to fire the alarm
+	; 	cjne a, MINUTES, alarm_snoozing_cont1 							; compare snooze minutes to current minutes
+	; 		mov a, #00h
+	; 		cjne a, SECONDS, alarm_snoozing_cont1 						; compare current seconds to 0
+	; 			; TODO:  don't actually fire the alarm if the clock is in SET_TIME_STATE or SET_ALARM_STATE
+	; 			lcall ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE 		; transition to alarm firing state
+	; 			sjmp alarm_snoozing_cont2
 
 	alarm_snoozing_cont0: 												; alarm is disabled if P0.5 is low
 		lcall ALARM_SNOOZING_STATE_TO_ALARM_DISABLED_STATE 				; transistion to alarm disabled state
 		sjmp alarm_snoozing_cont2
 
-	alarm_snoozing_cont1: 												; check if alarm or time has changed
-	; TODO:  FILL THIS IN -- if no time or alarm change, jump to alarm_snoozing_cont2 to keep snoozing
-		; lcall ALARM_SNOOZING_STATE_TO_ALARM_ENABLED_STATE
+	; alarm_snoozing_cont1: 												; check if alarm or time has changed
+	; ; TODO:  FILL THIS IN -- if no time or alarm change, jump to alarm_snoozing_cont2 to keep snoozing
+	; 	; lcall ALARM_SNOOZING_STATE_TO_ALARM_ENABLED_STATE
 
 	alarm_snoozing_cont2:
 ret
@@ -748,39 +768,77 @@ TIMER_0_SERVICE:
 	push PSW
 	push 6
 
-	; if DECA_STATE is DECA_FAST_STATE, increment DECATRON with every 60Hz interrupt
+	; ===========================================================
+	; Check if DECA_STATE = DECA_FILL_UP_STATE
 	mov a, DECA_STATE
-	cjne a, #DECA_FAST_STATE, timer_0_service_cont4
-		
-		; it is possible for DECATRON to wrap around 60 before it matches SECONDS, so roll over DECATRON if needed
+	cjne a, #DECA_FILL_UP_STATE, timer_0_service_cont4
+		; if DECA_STATE is DECA_FILL_UP_STATE, increment DECATRON with every 30Hz interrupt
 		inc DECATRON
+		; it is possible for DECATRON to wrap around 60 before it matches SECONDS, so roll over DECATRON if needed
 		mov a, DECATRON
 		cjne a, #3Ch, timer_0_service_cont5 					; check if DECATRON = 60 (dec)
 			mov DECATRON, #00h 									; move 0 into DECATRON
 		timer_0_service_cont5:
 
-		; check if in DECA_FILL_UP_STATE (e.g. transitioning from SET_ALARM_STATE to SHOW_ALARM_STATE)
-		jnb DECA_IN_TRANSITION?, timer_0_service_cont8
-			mov a, SECONDS
-			cjne a, DECATRON, timer_0_service_cont8 			; check if decatron is displaying current seconds
-				lcall ENTER_DECA_COUNTING_SECONDS_STATE 		; transition to DECA_COUNTING_SECONDS_STATE
-				clr DECA_IN_TRANSITION? 						; clear the transition bit
-		timer_0_service_cont8:
+		; check if finished with the transition (DECATRON = SECONDS)
+		mov a, SECONDS
+		cjne a, DECATRON, timer_0_service_cont4 			; check if decatron is displaying current seconds
+			lcall ENTER_DECA_COUNTING_SECONDS_STATE 		; transition to DECA_COUNTING_SECONDS_STATE
+			clr DECA_IN_TRANSITION? 						; clear the transition bit
 
 	timer_0_service_cont4:
+
+	; ===========================================================
+	; Check if DECA_STATE = DECA_FAST_STATE
+	mov a, DECA_STATE
+	cjne a, #DECA_FAST_STATE, timer_0_service_cont7
+		; if DECA_STATE is DECA_FAST_STATE, increment DECATRON with every 60Hz interrupt
+		inc DECATRON
+		; check if we need to wrap DECATRON around 60
+		mov a, DECATRON
+		cjne a, #3Ch, timer_0_service_cont6 					; check if DECATRON = 60 (dec)
+			mov DECATRON, #00h 									; move 0 into DECATRON
+		timer_0_service_cont6:
+
+		; check if transitioning
+		jnb DECA_IN_TRANSITION?, timer_0_service_cont7
+			jb TO_COUNTDOWN?, timer_0_service_cont10 				; check if transition is into DECA_COUNTING_SECONDS_STATE
+				; check if finished with the transition (DECATRON = SECONDS)
+				mov a, SECONDS
+				cjne a, DECATRON, timer_0_service_cont7 			; check if decatron is displaying current seconds
+					lcall ENTER_DECA_COUNTING_SECONDS_STATE 		; transition to DECA_COUNTING_SECONDS_STATE
+					clr DECA_IN_TRANSITION? 						; clear the transition bit
+					sjmp timer_0_service_cont7
+
+			timer_0_service_cont10: 								; transition is into DECA_COUNTDOWN_STATE
+				; check if finished with the transition (DECATRON = 30 dec)
+				mov a, #1Eh
+				cjne a, DECATRON, timer_0_service_cont7 			; check if decatron is displaying current seconds
+					lcall ENTER_DECA_COUNTDOWN_STATE 				; transition to DECA_COUNTDOWN_STATE
+					clr DECA_IN_TRANSITION? 						; clear the transition bit
+					clr TO_COUNTDOWN? 								; clear the transition to countdown bit
+
+	timer_0_service_cont7:
+
+	; ===========================================================
+	; Check if DECA_STATE = DECA_COUNTDOWN_STATE
+	mov a, DECA_STATE
+	cjne a, #DECA_COUNTDOWN_STATE, timer_0_service_cont9
+		; if DECA_STATE is DECA_COUNTDOWN_STATE, decrement SNOOZE_COUNT_PER_DECA_PIN each second
+		djnz SNOOZE_COUNT_PER_DECA_PIN, timer_0_service_cont8
+			mov SNOOZE_COUNT_PER_DECA_PIN, SNOOZE_COUNT_PER_DECA_PIN_RELOAD 	; reload SNOOZE_COUNT_PER_DECA_PIN
+			djnz DECATRON, timer_0_service_cont8 								; decrement DECATRON and check if reached zero
+				; mov DECATRON, #01h 												; to prevent decatron from blanking
+				lcall ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE 				; fire alarm
+		timer_0_service_cont8:
+
+	timer_0_service_cont9:
+
+	; ===========================================================
+	; Normal TIMER_0_ISR:
 	djnz TIMER_0_POST_SCALER, timer_0_service_cont1
 		; --- the following code is called at 1Hz ---
 		mov TIMER_0_POST_SCALER, TIMER_0_POST_SCALER_RELOAD 	; reload TIMER_0_POST_SCALER
-
-		; reload TIMER_0_POST_SCALER
-		; mov a, DECA_STATE
-		; cjne a, #DECA_FAST_STATE, timer_0_service_cont6
-			; mov TIMER_0_POST_SCALER, #3Ch 	; update TIMER_0_POST_SCALER (60 dec)
-			; sjmp timer_0_service_cont7
-		; timer_0_service_cont6:
-
-			; mov TIMER_0_POST_SCALER, #01h
-		; timer_0_service_cont7:
 
 		; check if ALARM_STATE = ALARM_FIRING_STATE
 		mov a, ALARM_STATE
@@ -835,7 +893,6 @@ CHECK_FOR_ROT_ENC_SHORT_PRESS:
 			djnz R2, check_short_press_loop0		; count R3 down again until R2 counts down
 			setb BUTTON_FLAG						; set the BUTTON_FLAG
 			setb TRANSITION_STATE?					; set the TRANSITION_STATE? bit
-			; setb P1.6
 	check_short_press_cont1:
 ret
 
@@ -1020,8 +1077,6 @@ SET_ALARM_STATE_TO_SHOW_ALARM_STATE:
 	clr EX1						; disable external interrupt 1
 
 	; Update DECA_STATE
-	setb DECA_IN_TRANSITION? 		; enter fast mode temporarily
-	mov DECATRON, #00h
 	lcall ENTER_DECA_FILL_UP_STATE
 
 	; Update CLOCK_STATE
@@ -1051,28 +1106,36 @@ ret
 
 ALARM_ENABLED_STATE_TO_ALARM_FIRING_STATE:
 	clr P1.1 									; turn on buzzer.  NOTE: inverter between pin and buzzer (low = buzzing)
+	lcall ENTER_DECA_FAST_STATE 				; update DECA_STATE
 	mov ALARM_STATE, #ALARM_FIRING_STATE 		; update ALARM_STATE
 ret
 
 ALARM_FIRING_STATE_TO_ALARM_DISABLED_STATE:
 	setb P1.1 									; turn off buzzer.  NOTE: inverter between pin and buzzer (high = off)
 	clr P1.6 									; turn off alarm light
+	setb DECA_IN_TRANSITION? 					; stay in DECA_FAST_STATE until DECATRON matches SECONDS
 	mov ALARM_STATE, #ALARM_DISABLED_STATE 		; update ALARM_STATE
 ret
 
 ALARM_FIRING_STATE_TO_ALARM_SNOOZING_STATE:
-	setb P1.1 									; turn off buzzer.  NOTE: inverter between pin and buzzer (high = off)
-	lcall SET_SNOOZE_ALARM 						; update the snooze time
-	mov ALARM_STATE, #ALARM_SNOOZING_STATE 		; update ALARM_STATE
+	setb P1.1 															; turn off buzzer.  NOTE: inverter between pin and buzzer (high = off)
+	; lcall SET_SNOOZE_ALARM 												; update the snooze time
+	mov SNOOZE_COUNT_PER_DECA_PIN, SNOOZE_COUNT_PER_DECA_PIN_RELOAD 	; reload SNOOZE_COUNT_PER_DECA_PIN
+	setb DECA_IN_TRANSITION? 											; prepare to transition decatron to DECA_COUNTDOWN_STATE
+	setb TO_COUNTDOWN? 													; prepare to transition decatron to DECA_COUNTDOWN_STATE
+	; lcall ENTER_DECA_COUNTDOWN_STATE 									; update DECA_STATE
+	mov ALARM_STATE, #ALARM_SNOOZING_STATE 								; update ALARM_STATE
 ret
 
 ALARM_SNOOZING_STATE_TO_ALARM_DISABLED_STATE:
 	clr P1.6 									; turn off alarm light
+	lcall ENTER_DECA_FILL_UP_STATE 			 	; update DECA_STATE
 	mov ALARM_STATE, #ALARM_DISABLED_STATE 		; update ALARM_STATE
 ret
 
 ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE:
 	clr P1.1 									; turn on buzzer.  NOTE: inverter between pin and buzzer (low = buzzing)
+	lcall ENTER_DECA_FAST_STATE 				; update DECA_STATE
 	mov ALARM_STATE, #ALARM_FIRING_STATE 		; update ALARM_STATE
 ret
 
@@ -1516,10 +1579,12 @@ DECA_LOAD:
 	cjne a, #00h, deca_test_cont0				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end,
 												; otherwise, continue
 		
-		; FIX -- FOR FAST MODE
-		;mov DECATRON, #01						; move 1 into decatron (don't blank in fast mode, so the decatron always starts in the same spot)
-		;lcall DECA_RESET 						; reset the decatron (light up K0)
-		;sjmp deca_toggle_cont1 				; exit (NOTE: "ret" DOES NOT work for some reason...)
+		; don't blank decatron if in DECA_FAST_STATE
+		mov a, DECA_STATE
+		cjne a, #DECA_FAST_STATE, deca_load_cont8
+			sjmp deca_load_display_decatron_equals_1 	; treat DECATRON as if it equals 1 instead of 0, but don't increment DECATRON
+		deca_load_cont8:
+		mov a, DECATRON   						; move DECATRON into the accumulator
 
 		clr P0.4								; turn off the decatron
 		clr P0.0								; turn off K0
@@ -1530,6 +1595,7 @@ DECA_LOAD:
 	deca_test_cont0:
 
 	cjne a, #01h, deca_test_cont1				; if DECATRON = 1, then no need to toggle, skip to the end, otherwise, continue
+		deca_load_display_decatron_equals_1:
 		lcall DECA_RESET 						; reset the decatron (light up K0)
 		ljmp deca_load_cont6 					; exit (NOTE: "ret" DOES NOT work for some reason...)
 	deca_test_cont1:
@@ -1606,19 +1672,19 @@ UPDATE_DECA:
 		; on transition to this state:
 			; Timer 0 interrupt should be configured to tigger @ 1Hz
 		lcall DECA_COUNTING_SECONDS
-		ljmp update_deca_cont5
+		ljmp update_deca_cont6
 	update_deca_cont0:
 	; FAST_MODE ========================================================
 	cjne a, #DECA_FAST_STATE, update_deca_cont1
 		; on transition to this state:
 			; Timer 0 interrupt should be configured to tigger @ 60Hz
 		lcall DECA_FAST
-		ljmp update_deca_cont5
+		ljmp update_deca_cont6
 	update_deca_cont1:
 	; SCROLLING ========================================================
 	cjne a, #DECA_SCROLLING_STATE, update_deca_cont2
 		lcall DECA_SCROLLING
-		ljmp update_deca_cont5
+		ljmp update_deca_cont6
 	update_deca_cont2:
 	; RADAR_MODE =======================================================
 	cjne a, #DECA_RADAR_STATE, update_deca_cont3
@@ -1626,17 +1692,22 @@ UPDATE_DECA:
 			; call DECA_RESET (to position decatron at K0)
 			; Timer 0 interrupt should be configured to tigger @ 60Hz
 		lcall DECA_RADAR
-		ljmp update_deca_cont5
+		ljmp update_deca_cont6
 	update_deca_cont3:
 	; COUNTDOWN ========================================================
 	cjne a, #DECA_COUNTDOWN_STATE, update_deca_cont4
 		lcall DECA_COUNTDOWN
-		ljmp update_deca_cont5
+		ljmp update_deca_cont6
 	update_deca_cont4:
 	; FLASHING =========================================================
 	cjne a, #DECA_FLASHING_STATE, update_deca_cont5
 		lcall DECA_FLASHING
+		ljmp update_deca_cont6
 	update_deca_cont5:
+	; FILL UP ==========================================================
+	cjne a, #DECA_FILL_UP_STATE, update_deca_cont6
+		lcall DECA_FILL_UP
+	update_deca_cont6:
 
 	pop PSW
 	pop acc
@@ -1756,10 +1827,7 @@ ret
 
 ; ======= Decatron State Functions =========
 DECA_COUNTING_SECONDS:
-	; check if DECA_IN_TRANSITION? is set
-	; jb DECA_IN_TRANSITION?, deca_counting_seconds_cont0
-		mov DECATRON, SECONDS
-	; deca_counting_seconds_cont0:
+	mov DECATRON, SECONDS
 	lcall DECA_LOAD
 ret
 
@@ -1808,6 +1876,7 @@ DECA_RADAR:
 ret
 
 DECA_COUNTDOWN:
+	lcall DECA_LOAD
 ret
 
 DECA_FLASHING:
@@ -1858,8 +1927,15 @@ ENTER_DECA_RADAR_STATE:
 ret
 
 ENTER_DECA_COUNTDOWN_STATE:
-	; start with full decatron for countdown
-	mov DECA_STATE, #DECA_COUNTDOWN_STATE 				; update decatron state variable
+	; Make Timer 0 ISR fire at 1Hz
+	mov TL0, #0C4h 								; initialize TL0 (#C4h for 60Hz, #CEh for 50Hz)
+	mov TH0, #0C4h 								; initialize TH0 (#C4h for 60Hz, #CEh for 50Hz) - reload value
+	mov TIMER_0_POST_SCALER, #01h 				; update TIMER_0_POST_SCALER
+	mov TIMER_0_POST_SCALER_RELOAD, #01h 		; update TIMER_0_POST_SCALER_RELOAD
+	; setb TR0 									; start timer 0
+
+	mov DECATRON, #1Eh 							; move 30 (dec) into DECATRON to light up full
+	mov DECA_STATE, #DECA_COUNTDOWN_STATE 		; update decatron state variable
 ret
 
 ENTER_DECA_FLASHING_STATE:
@@ -1867,11 +1943,20 @@ ENTER_DECA_FLASHING_STATE:
 	; clr P0.4 											; blank the decatron
 	; mov DECATRON, #1Eh 								; move 30 (dec) into DECATRON to light up full
 
+	; check if the alarm is currently enabled, in which case, keep it enabled
+	; NOTE:  this ensures a snoozing alarm gets canceled
+	jnb P0.5, enter_deca_flashing_state_cont0
+		; TODO:  the alarm might actually be in snoozing or enabled states, so the below call doesn't really make full sense,
+		;        consider doing entry functions if possible for the alarm and clock state transitions
+		lcall ALARM_SNOOZING_STATE_TO_ALARM_ENABLED_STATE 	; alarm is enabled if P0.5 is high
+	enter_deca_flashing_state_cont0:
+
 	mov DECA_STATE, #DECA_FLASHING_STATE 				; update decatron state variable
 ret
 
 ENTER_DECA_FILL_UP_STATE:
 	mov DECATRON, #00h 						; start DECATRON at zero
+	setb DECA_IN_TRANSITION? 				; DECA_FILL_UP_STATE is a temporary state
 
 	; Make Timer 0 ISR fire at 30Hz (or 25Hz depending on AC mains frequency)
 	mov TL0, #0FEh
@@ -1879,8 +1964,7 @@ ENTER_DECA_FILL_UP_STATE:
 	mov TIMER_0_POST_SCALER, #1Eh 			; update TIMER_0_POST_SCALER (30 dec)
 	mov TIMER_0_POST_SCALER_RELOAD, #1Eh 	; update TIMER_0_POST_SCALER_RELOAD
 	
-
-	mov DECA_STATE, #DECA_FAST_STATE 					; update decatron state variable
+	mov DECA_STATE, #DECA_FILL_UP_STATE 	; update decatron state variable
 ret
 
 ; ==========================================
@@ -2189,21 +2273,21 @@ ADJUST_TIMEOUT:
 	pop acc
 ret
 
-SET_SNOOZE_ALARM:
-	push acc
-	push b
-	push PSW
+; SET_SNOOZE_ALARM:
+; 	push acc
+; 	push b
+; 	push PSW
 
-	; set snooze minutes
-	mov a, MINUTES 			; move MINUTES into acc
-	mov b, #3Ch 		 	; move 60 (dec) into b
-	add a, SNOOZE_DURATION 	; add SNOOZE_DURATION to the acc
-	div ab 					; divide a by b
-	mov SNOOZE_MINUTES, b   ; move b (the remainder from above) into SNOOZE_MINUTES
+; 	; set snooze minutes
+; 	mov a, MINUTES 			; move MINUTES into acc
+; 	mov b, #3Ch 		 	; move 60 (dec) into b
+; 	add a, SNOOZE_DURATION 	; add SNOOZE_DURATION to the acc
+; 	div ab 					; divide a by b
+; 	mov SNOOZE_MINUTES, b   ; move b (the remainder from above) into SNOOZE_MINUTES
 
-	pop PSW
-	pop b
-	pop acc
-ret
+; 	pop PSW
+; 	pop b
+; 	pop acc
+; ret
 
 end
