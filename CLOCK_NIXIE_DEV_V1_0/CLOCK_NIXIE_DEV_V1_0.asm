@@ -19,7 +19,7 @@ reti
 .org 000Bh
 TIMER_0_ISR:
 	lcall TIMER_0_SERVICE 		; update the time
-reti 						; exit
+reti 							; exit
 	
 ; External interrupt 1
 .org 0013h
@@ -52,6 +52,7 @@ INIT:
 	.equ CLOCK_STATE, 7Fh
 	.equ NEXT_CLOCK_STATE, 7Bh
 	.equ TIMEOUT, 7Ah
+	; .equ TIMEOUT_MINUTES, 77h
 	.equ TIMEOUT_LENGTH, 78h
 
 	SHOW_TIME_STATE equ 1
@@ -509,8 +510,10 @@ SET_TIME:    ; has a sub-state machine with state variable SET_ALARM_SUB_STATE
 	lcall TWLV_TWFR_HOUR_ADJ
 
 	; Check for a timeout event
-	mov a, SECONDS
-	cjne a, TIMEOUT, set_time_cont5
+	mov a, TIMEOUT
+	cjne a, #00h, set_time_cont5
+	; mov a, SECONDS
+	; cjne a, TIMEOUT, set_time_cont5
 		lcall DD_ADJ 						; check for valid day, given month
 		lcall YY_ADJ 						; check for valid year, given month and day
 		clr INC_LEAP_YEAR? 					; clear the leap year bit
@@ -552,8 +555,10 @@ SHOW_ALARM:
 	show_alarm_cont1:
 
 	; Check for timeout event
-	mov a, SECONDS
-	cjne a, TIMEOUT, show_alarm_cont2
+	mov a, TIMEOUT
+	cjne a, #00h, show_alarm_cont2
+	; mov a, SECONDS
+	; cjne a, TIMEOUT, show_alarm_cont2
 		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE
 		; mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
 	show_alarm_cont2:
@@ -575,8 +580,10 @@ SET_ALARM:  ; has a sub-state machine with state variable SET_ALARM_SUB_STATE
 	set_alarm_cont1:
 
 	; Check for timeout event
-	mov a, SECONDS
-	cjne a, TIMEOUT, set_alarm_cont2
+	mov a, TIMEOUT
+	cjne a, #00h, set_alarm_cont2
+	; mov a, SECONDS
+	; cjne a, TIMEOUT, set_alarm_cont2
 		lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE
 	set_alarm_cont2:
 
@@ -840,6 +847,14 @@ TIMER_0_SERVICE:
 		; --- the following code is called at 1Hz ---
 		mov TIMER_0_POST_SCALER, TIMER_0_POST_SCALER_RELOAD 	; reload TIMER_0_POST_SCALER
 
+		; check if CLOCK_STATE = SHOW_TIME_STATE, in which case timeouts are inactive
+		mov a, CLOCK_STATE
+		cjne a, #SHOW_TIME_STATE, timer_0_serivce_cont11
+			sjmp timer_0_service_cont12
+		timer_0_serivce_cont11:
+		dec TIMEOUT 			; decrement TIMEOUT (will check if TIMEOUT = 0 in the respective state)
+		timer_0_service_cont12:
+
 		; check if ALARM_STATE = ALARM_FIRING_STATE
 		mov a, ALARM_STATE
 		cjne a, #ALARM_FIRING_STATE, timer_0_service_cont3
@@ -871,7 +886,7 @@ TIMER_0_SERVICE:
 	pop 6
 	pop PSW
 	pop acc
-ret 			 			; exit
+ret
 
 ; ====== State Transition Functions ======
 CHECK_FOR_ROT_ENC_SHORT_PRESS:
@@ -946,6 +961,7 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 	cont15:
 ret
 
+; Clock state machine transitions ========
 SET_TIME_STATE_TO_SHOW_TIME_STATE:
 	clr EX0						; disable external interrupt 0
 	clr EX1						; disable external interrupt 1
@@ -966,11 +982,10 @@ ret
 
 SHOW_TIME_STATE_TO_SHOW_ALARM_STATE:
 	; set timeout (10 seconds)
-	mov a, SECONDS 		; move SECONDS into acc 
-	mov b, #3Ch 		; move 60 (dec) into b
-	add a, #0Ah 		; add 10 (dec) to the acc
-	div ab 				; divide a by b
-	mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+	; mov TIMEOUT_LENGTH, #0Ah
+	; lcall ADJUST_TIMEOUT
+	mov TIMEOUT_LENGTH, #0Ah
+	mov TIMEOUT, TIMEOUT_LENGTH
 
 	; Have VFD display "ALarnn"
 	mov GRID9, #0FFh    ; BLANK
@@ -989,8 +1004,10 @@ ret
 
 SHOW_TIME_STATE_TO_SET_TIME_STATE:
 	; set timeout (59 seconds)
+	; mov TIMEOUT_LENGTH, #3Bh
+	; lcall ADJUST_TIMEOUT
 	mov TIMEOUT_LENGTH, #3Bh
-	lcall ADJUST_TIMEOUT
+	mov TIMEOUT, TIMEOUT_LENGTH
 
 	clr ROT_FLAG					; clear the ROT_FLAG
 
@@ -1026,8 +1043,10 @@ ret
 
 SHOW_ALARM_STATE_TO_SET_ALARM_STATE:
 	; set timeout (10 seconds)
+	; mov TIMEOUT_LENGTH, #0Ah
+	; lcall ADJUST_TIMEOUT
 	mov TIMEOUT_LENGTH, #0Ah
-	lcall ADJUST_TIMEOUT
+	mov TIMEOUT, TIMEOUT_LENGTH
 
 	; initalize external interrupts for rotary encoder
 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
@@ -1064,11 +1083,9 @@ ret
 
 SET_ALARM_STATE_TO_SHOW_ALARM_STATE:
 	; set timeout (10 seconds)
-	mov a, SECONDS 		; move SECONDS into acc 
-	mov b, #3Ch 		; move 60 (dec) into b
-	add a, #0Ah 		; add 10 (dec) to the acc
-	div ab 				; divide a by b
-	mov TIMEOUT, b    	; move b (the remainder from above) into TIMEOUT
+	mov TIMEOUT_LENGTH, #0Ah
+	; lcall ADJUST_TIMEOUT
+	mov TIMEOUT, TIMEOUT_LENGTH
 
 	; Clear the TRANSITION_STATE? bit
 	clr TRANSITION_STATE?
@@ -1094,6 +1111,27 @@ SHOW_ALARM_STATE_TO_SHOW_TIME_STATE:
 	mov CLOCK_STATE, #SHOW_TIME_STATE
 ret
 
+ENTER_GPS_SYNC_STATE:
+	; set timeout (xxx seconds)
+	
+	; have VFD display all dashes
+
+	; put decatron into DECA_RADAR_STATE
+
+	; make serial ISR highest priority
+
+	; enter GPS_OBTAIN_FIX_STATE:
+		; == GPS OBTAIN FIX
+		; Timer 0 keeps track of time (for timeout) and also does radar mode
+		; Timer 1 is configured to LPF GPS fix signal to detect when a fix is found
+		; Timer 2 does update displays
+
+	; turn off GPS sync indicator
+
+	; update CLOCK_STATE
+ret
+
+; Alarm state machine transitions ========
 ALARM_DISABLED_STATE_TO_ALARM_ENABLED_STATE:
 	setb P1.6 									; turn on alarm light
 	mov ALARM_STATE, #ALARM_ENABLED_STATE 		; update ALARM_STATE
@@ -1119,7 +1157,6 @@ ret
 
 ALARM_FIRING_STATE_TO_ALARM_SNOOZING_STATE:
 	setb P1.1 															; turn off buzzer.  NOTE: inverter between pin and buzzer (high = off)
-	; lcall SET_SNOOZE_ALARM 												; update the snooze time
 	mov SNOOZE_COUNT_PER_DECA_PIN, SNOOZE_COUNT_PER_DECA_PIN_RELOAD 	; reload SNOOZE_COUNT_PER_DECA_PIN
 	setb DECA_IN_TRANSITION? 											; prepare to transition decatron to DECA_COUNTDOWN_STATE
 	setb TO_COUNTDOWN? 													; prepare to transition decatron to DECA_COUNTDOWN_STATE
@@ -1147,6 +1184,7 @@ ret
 ; ========================================
 
 ; ==== Sub-State Transition Functions ====
+; SET_TIME sub-state transitions =========
 SET_MM_STATE_TO_SET_DD_STATE:
 	; Clear the TRANSITION_STATE? bit
 	clr TRANSITION_STATE?
@@ -1216,6 +1254,7 @@ SET_HR_STATE_TO_SET_MIN_STATE:
 	mov SET_TIME_SUB_STATE, #SET_MIN_STATE 	; update SET_TIME_SUB_STATE
 ret
 
+; SET_ALARM sub-state transitions ========
 SET_ALARM_HR_STATE_TO_SET_ALARM_MIN_STATE:
 	; Clear the TRANSITION_STATE? bit
 	clr TRANSITION_STATE?
@@ -1231,6 +1270,21 @@ SET_ALARM_HR_STATE_TO_SET_ALARM_MIN_STATE:
 	mov R0, #5Ch							; corresponds to memory address of ALARM_MINUTES
 
 	mov SET_ALARM_SUB_STATE, #SET_ALARM_MIN_STATE 	; update SET_TIME_SUB_STATE
+ret
+
+; GPS_SYNC sub-state transitions =========
+ENTER_GPS_OBTAIN_DATA_STATE:
+	; == GPS OBTAIN DATA 
+	; Timer 0 keeps track of time (for timeout) and also does radar mode
+	; Timer 1 is used to set baud rate if a fix is found before 2 minutes expires
+	; Timer 2 does update displays
+ret
+
+ENTER_GPS_SET_TIMEZONE_STATE:
+	; == GPS SET TIMEZONE
+	; Timer 0 keeps track of time (for timeout) and decatron flashes
+	; Timer 1 not used
+	; Timer 2 does update displays
 ret
 
 ; ========================================
@@ -1984,7 +2038,8 @@ ENC_A:
 	jb A_FLAG, enc_a_cont2
 		inc @R0
 		setb ROT_FLAG								; set the rotation flag
-		lcall ADJUST_TIMEOUT 						; adjust any timeouts that may be active
+		; lcall ADJUST_TIMEOUT 						; adjust any timeouts that may be active
+		mov TIMEOUT, TIMEOUT_LENGTH
 		mov VFD_MASK, #0FFh							; make all displays visible
 		mov NIX_MASK, #0FFh							; make all displays visible
 		setb A_FLAG
@@ -2008,7 +2063,7 @@ ENC_A:
 	; pop the original SFR values back into their place and restore their values
 	pop PSW
 	pop acc
-ret 											; exit
+ret
 
 ENC_B:
 	; push any used SFRs onto the stack to preserve their values
@@ -2025,7 +2080,8 @@ ENC_B:
 	jb B_FLAG, enc_b_cont2
 		dec @R0
 		setb ROT_FLAG								; set the rotation flag
-		lcall ADJUST_TIMEOUT 						; adjust any timeouts that may be active
+		; lcall ADJUST_TIMEOUT 						; adjust any timeouts that may be active
+		mov TIMEOUT, TIMEOUT_LENGTH
 		mov VFD_MASK, #0FFh							; make all displays visible
 		mov NIX_MASK, #0FFh							; make all displays visible
 		setb B_FLAG
@@ -2058,7 +2114,7 @@ ENC_B:
 	; pop the original SFR values back into their place and restore their values
 	pop PSW
 	pop acc
-ret 											; exit
+ret
 
 TWLV_TWFR_HOUR_ADJ:
 	; push any used SFRs onto the stack to preserve their values
@@ -2256,38 +2312,22 @@ LONG_DELAY:
 	pop 0
 ret
 
-ADJUST_TIMEOUT:
-	push acc
-	push b
-	push PSW
-
-	; set timeout (length refers to TIMEOUT_LENGTH)
-	mov a, SECONDS 			; move SECONDS into acc 
-	mov b, #3Ch 			; move 60 (dec) into b
-	add a, TIMEOUT_LENGTH 	; add 59 (dec) to the acc
-	div ab 					; divide a by b
-	mov TIMEOUT, b    		; move b (the remainder from above) into TIMEOUT
-
-	pop PSW
-	pop b
-	pop acc
-ret
-
-; SET_SNOOZE_ALARM:
+; ADJUST_TIMEOUT:
 ; 	push acc
 ; 	push b
 ; 	push PSW
 
-; 	; set snooze minutes
-; 	mov a, MINUTES 			; move MINUTES into acc
-; 	mov b, #3Ch 		 	; move 60 (dec) into b
-; 	add a, SNOOZE_DURATION 	; add SNOOZE_DURATION to the acc
+; 	; set timeout (length refers to TIMEOUT_LENGTH)
+; 	mov a, SECONDS 			; move SECONDS into acc 
+; 	mov b, #3Ch 			; move 60 (dec) into b
+; 	add a, TIMEOUT_LENGTH 	; add the reload timeout length to the acc
 ; 	div ab 					; divide a by b
-; 	mov SNOOZE_MINUTES, b   ; move b (the remainder from above) into SNOOZE_MINUTES
+; 	mov TIMEOUT, b  ; move b (the remainder from above) into TIMEOUT
 
 ; 	pop PSW
 ; 	pop b
 ; 	pop acc
 ; ret
+
 
 end
