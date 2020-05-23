@@ -33,6 +33,13 @@ TIMER_1_ISR:
 	lcall TIMER_1_SERVICE 		; update the time
 reti 							; exit
 
+; Serial Port interrupt
+.org 0023h
+SERIAL_ISR:
+	lcall SERIAL_SERVICE 		; receive data
+	clr RI 						; clear receive interrupt flag
+reti 							; exit
+
 ; Timer 2 interrupt
 .org 002Bh
 DISPLAY_ISR:
@@ -65,6 +72,7 @@ INIT:
 	SET_TIME_STATE equ 2
 	SHOW_ALARM_STATE equ 3
 	SET_ALARM_STATE equ 4
+	GPS_SYNC_STATE equ 5
 	mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
 
 	mov TIMEOUT_LENGTH, #3Bh 			; (59 dec)
@@ -125,9 +133,11 @@ INIT:
 	mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_DOLLAR
 	mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_G
 
+	.equ GPS_POINTER, 71h
 	.equ GPS_FIX_LPF, 72h
 	.equ CALCULATED_GPS_CHECKSUM, 73h
 	.equ GPS_WAIT_TIME, 74h
+	mov GPS_POINTER, #08h  						; load GPS_POINTER with memory address of RECEIVED_GPS_HRS_TENS
 
 	; ====== Received GPS Variables ======
 	; !!!!!!! IMPORTANT: DO NOT MOVE THESE MEMORY LOCATIONS (pointers are used to update)
@@ -174,7 +184,7 @@ INIT:
 	; Checksum 
 	.equ RECEIVED_GPS_CHECKSUM,					14h			; data stored here is in hex!
 
-; =============================
+	; =============================
 
 	; Alarm State Variable:
 	.equ ALARM_STATE, 7Eh
@@ -444,12 +454,11 @@ INIT:
 	; PX0 (IP.0): external interrupt 0 priority bit
 
 	; Interrupt priority initialization
-	mov IP, #22h 		; make timer 0 interrpt (update time) highest priority
+	mov IP, #22h 		; make timer 0 interrupt (update time) and timer 2 interrupt (update displays) highest priority
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	mov SCON, #00h 		; initialize the serial port in mode 0
-
-	sjmp MAIN
+sjmp MAIN
 
 MAIN:
 	mov a, CLOCK_STATE
@@ -475,12 +484,12 @@ MAIN:
 
 
 	; cjne a, #SETTINGS_STATE, main_cont4
-	; 	lcall SHOW_ALARM
+	; 	lcall SETTINGS
 	; main_cont4:
 
-	; cjne a, #GPS_SYNC_STATE, main_cont5
-	; 	lcall SET_ALARM
-	; main_cont5:
+	cjne a, #GPS_SYNC_STATE, main_cont5
+		lcall GPS_SYNC
+	main_cont5:
 
 	; ======================================
 	mov a, ALARM_STATE
@@ -504,7 +513,6 @@ MAIN:
 		lcall ALARM_SNOOZING
 	main_cont9:
 sjmp MAIN
-
 
 
 ; ========= Clock State Functions ==========
@@ -689,6 +697,32 @@ SET_ALARM:  ; has a sub-state machine with state variable SET_ALARM_SUB_STATE
 	lcall TWLV_TWFR_HOUR_ADJ
 ret
 
+GPS_SYNC: 	; has a sub-state machine with state variable GPS_SYNC_SUB_STATE
+	mov a, GPS_SYNC_SUB_STATE
+
+	cjne a, #GPS_OBTAIN_FIX_STATE, gps_sync_cont0
+		lcall GPS_OBTAIN_FIX
+		sjmp gps_sync_cont2
+	gps_sync_cont0:
+
+	cjne a, #GPS_OBTAIN_DATA_STATE, gps_sync_cont1
+		lcall GPS_OBTAIN_DATA
+		sjmp gps_sync_cont2
+	gps_sync_cont1:
+
+	cjne a, #GPS_SET_TIMEZONE_STATE, gps_sync_cont2
+		lcall GPS_SET_TIMEZONE
+	gps_sync_cont2:
+
+	; Check for timeout event
+	mov a, TIMEOUT
+	cjne a, #00h, gps_sync_cont3
+	; mov a, SECONDS
+	; cjne a, TIMEOUT, gps_sync_cont3
+		lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+	gps_sync_cont3:
+ret
+
 ; ===== Set Time Sub-State Functions =======
 
 SET_MM:
@@ -777,6 +811,51 @@ SET_MIN:
 	set_min_cont3:
 ret
 
+; ===== Set Alarm Sub-State Functions ======
+
+SET_ALARM_HR:
+	; ALARM_HOURS gets written to display in TWLV_TWFR_HOUR_ADJ function, called in SET_ALARM
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, set_alarm_hr_cont3
+		lcall SET_ALARM_HR_STATE_TO_SET_ALARM_MIN_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	set_alarm_hr_cont3:
+ret
+
+SET_ALARM_MIN:
+	; Operations to dispay ALARM_MINUTES register in decimal format: MIN
+	mov a, ALARM_MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	; Display ALARM_MINUTES:
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, set_alarm_min_cont3
+		lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	set_alarm_min_cont3:
+ret
+
+; ===== GPS Sync Sub-State Functions ======
+
+GPS_OBTAIN_FIX:
+	; there is nothing to do here. Everything is handled by interrupts.
+ret
+
+GPS_OBTAIN_DATA:
+	; there is nothing to do here. Everything is handled by interrupts.
+ret
+
+GPS_SET_TIMEZONE:
+
+ret
+
 ; ========= Alarm State Functions ==========
 
 ALARM_ENABLED:
@@ -832,36 +911,6 @@ ALARM_SNOOZING:
 	; 	; lcall ALARM_SNOOZING_STATE_TO_ALARM_ENABLED_STATE
 
 	alarm_snoozing_cont2:
-ret
-
-; ===== Set Alarm Sub-State Functions ======
-SET_ALARM_HR:
-	; ALARM_HOURS gets written to display in TWLV_TWFR_HOUR_ADJ function, called in SET_ALARM
-
-	; check for a rotary encoder short press
-	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, set_alarm_hr_cont3
-		lcall SET_ALARM_HR_STATE_TO_SET_ALARM_MIN_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-	set_alarm_hr_cont3:
-ret
-
-SET_ALARM_MIN:
-	; Operations to dispay ALARM_MINUTES register in decimal format: MIN
-	mov a, ALARM_MINUTES
-	mov b, #0Ah
-	div ab
-	mov MIN_TENS, a
-	mov MIN_ONES, b
-
-	; Display ALARM_MINUTES:
-	mov NIX2, MIN_TENS
-	mov NIX1, MIN_ONES
-
-	; check for a rotary encoder short press
-	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, set_alarm_min_cont3
-		lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-	set_alarm_min_cont3:
 ret
 
 ; ==========================================
@@ -1015,6 +1064,288 @@ TIMER_1_SERVICE:
 	timer_1_service_cont1:
 ret
 
+SERIAL_SERVICE:
+	; Uses a to store the received SBUF data
+	; Uses R3 to store the GPS_OBTAIN_DATA_SUB_STATE
+	; Uses R4 as a counter (for loops)
+	; Uses R0 as a data pointer
+	
+	; push registers/accumulator
+	push acc 
+	push 0
+	push 3
+	push 4
+
+	; NMEA $GPRMC sentence after fix:
+	; $GPRMC,hhmmss.sss,A,llll.llll,a,yyyyy.yyyy,a,v.vv,ttt.tt,ddmmyy,,,A*77
+	; $GPRMC,040555.000,A,3725.4817,N,12209.5683,W,0.42,201.93,070320,,,D*78
+
+	mov a, SBUF																; move SBUF into a
+	mov R3, GPS_OBTAIN_DATA_SUB_STATE										; move GPS_OBTAIN_DATA_SUB_STATE into R3
+
+	; We use the GPS_WAIT state for information not needed, like commas, speed, or magnetic variation
+	; Wait uses GPS_WAIT_TIME to determine how many received bytes to wait out
+	; GPS_WAIT:
+	cjne R3, #GPS_WAIT, serial_service_cont0
+		mov R4, #00h 														; R4 keeps track of how many times things loop (like how long to loop in the GPS_WAIT_FOR_TIME state)	
+		xrl CALCULATED_GPS_CHECKSUM, a										; keep updating the CALCULATED_GPS_CHECKSUM
+		djnz GPS_WAIT_TIME, gps_wait_cont0									; decrement until done waiting
+			mov GPS_OBTAIN_DATA_SUB_STATE, GPS_OBTAIN_DATA_NEXT_SUB_STATE	; if wait is over, load GPS_OBTAIN_DATA_SUB_STATE with the next state.
+		gps_wait_cont0:
+			ljmp serial_service_end											; jump to end
+	serial_service_cont0:
+
+	; "$"
+	; GPS_WAIT_FOR_DOLLAR:
+	cjne R3, #GPS_WAIT_FOR_DOLLAR, serial_service_cont1
+		cjne a, #24h, gps_wait_for_dollar_cont0								; check if received serial data is "$"
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_G					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			; inc GPS_OBTAIN_DATA_SUB_STATE 		 						; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+		gps_wait_for_dollar_cont0:
+			ljmp serial_service_end											; jump to end
+	serial_service_cont1:
+
+	; "G"
+	; GPS_WAIT_FOR_G:
+	cjne R3, #GPS_WAIT_FOR_G, serial_service_cont2
+		cjne a, #47h, gps_wait_for_g_cont0									; check if received serial data is "G"
+			mov CALCULATED_GPS_CHECKSUM, a									; initialize the CALCULATED_GPS_CHECKSUM (check sum does NOT include the "$" or "*" delimiters)
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_P					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			; inc GPS_OBTAIN_DATA_SUB_STATE 								; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			ljmp serial_service_end											; jump to end
+		gps_wait_for_g_cont0:
+			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
+	serial_service_cont2:
+
+	; "P"
+	; GPS_WAIT_FOR_P:
+	cjne R3, #GPS_WAIT_FOR_P, serial_service_cont3
+		cjne a, #50h, gps_wait_for_p_cont0									; check if received serial data is "P"
+			xrl CALCULATED_GPS_CHECKSUM, a 									; update the CALCULATED_GPS_CHECKSUM
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_R					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			; inc GPS_OBTAIN_DATA_SUB_STATE 								; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			ljmp serial_service_end											; jump to end
+		gps_wait_for_p_cont0:
+			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
+	serial_service_cont3:
+
+	; "R"
+	; GPS_WAIT_FOR_R:
+	cjne R3, #GPS_WAIT_FOR_R, serial_service_cont4
+		cjne a, #52h, gps_wait_for_r_cont0									; check if received serial data is "R"
+			xrl CALCULATED_GPS_CHECKSUM, a 									; update the CALCULATED_GPS_CHECKSUM
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_M					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			; inc GPS_OBTAIN_DATA_SUB_STATE 								; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			ljmp serial_service_end											; jump to end
+		gps_wait_for_r_cont0:
+			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
+	serial_service_cont4:
+
+	; "M"
+	; GPS_WAIT_FOR_M:
+	cjne R3, #GPS_WAIT_FOR_M, serial_service_cont5
+		cjne a, #4Dh, gps_wait_for_m_cont0									; check if received serial data is "M"
+			xrl CALCULATED_GPS_CHECKSUM, a 									; update the CALCULATED_GPS_CHECKSUM
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_C					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			; inc GPS_OBTAIN_DATA_SUB_STATE 								; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			ljmp serial_service_end											; jump to end
+		gps_wait_for_m_cont0:
+			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
+	serial_service_cont5:
+
+	; "C"
+	; GPS_WAIT_FOR_C:
+	cjne R3, #GPS_WAIT_FOR_C, serial_service_cont6
+		cjne a, #43h, gps_wait_for_c_cont0									; check if received serial data is "C"
+			xrl CALCULATED_GPS_CHECKSUM, a 									; update the CALCULATED_GPS_CHECKSUM
+			mov GPS_WAIT_TIME, #01h											; wait out "," (one byte)
+			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_TIME			; load next state for after un-needed byte(s) are received
+			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #08h   					; load next state for after un-needed byte(s) are received
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			; mov GPS_OBTAIN_DATA_SUB_STATE, #01h							; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			ljmp serial_service_end											; jump to end
+		gps_wait_for_c_cont0:
+			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
+	serial_service_cont6:
+
+	; Time
+	; GPS_WAIT_FOR_TIME:
+	cjne R3, #GPS_WAIT_FOR_TIME, serial_service_cont7
+		; NOTE: in this state, we change received ascii code to hex code by bitwise AND with mask: 00001111 = #0Fh.
+		; ascii code for 0: #30h -> hex code for 0: #00h
+		; ascii code for 1: #31h -> hex code for 1: #01h
+		; ascii code for 2: #32h -> hex code for 1: #02h
+		; etc....
+		xrl CALCULATED_GPS_CHECKSUM, a 		  								; update the CALCULATED_GPS_CHECKSUM
+		inc R4 																; increment R4
+		anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
+		mov R0, GPS_POINTER
+		mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
+		inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
+		cjne R4, #06h, gps_wait_for_time_cont0	 							; check if R4 (number of times we have looped) is equal to 6 (6 = number of received bytes for HH MM SS)
+			mov GPS_WAIT_TIME, #05h											; wait out ".000," (5 bytes)
+			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_A 			; load next state for after un-needed byte(s) are received
+			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #09h 		 				; load next state for after un-needed byte(s) are received
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; update GPS_OBTAIN_DATA_SUB_STATE
+			; mov GPS_OBTAIN_DATA_SUB_STATE, #01h 							; update GPS_OBTAIN_DATA_SUB_STATE
+		gps_wait_for_time_cont0:
+			ljmp serial_service_end											; jump to end
+	serial_service_cont7:
+
+	; "A"
+	; GPS_WAIT_FOR_A:
+	cjne R3, #GPS_WAIT_FOR_A, serial_service_cont8
+		cjne a, #41h, gps_wait_for_a_cont0 									; check if received serial data is "A"
+			xrl CALCULATED_GPS_CHECKSUM, a									; update the CALCULATED_GPS_CHECKSUM
+			; mov GPS_WAIT_TIME, #01h										; wait out "," (one byte)
+			mov GPS_WAIT_TIME, #26h											; wait out ",llll.llll,a,yyyyy.yyyy,a,v.vv,ttt.tt," (38 bytes)
+																			; we are NOT saving latitude and longitude data from GPS
+			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_LATITUDE	; load next state for after un-needed byte(s) are received
+			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_DATE			; load next state for after un-needed byte(s) are received
+			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #0Ah						; load next state for after un-needed byte(s) are received
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			; mov GPS_OBTAIN_DATA_SUB_STATE, #01h 							; update GPS_OBTAIN_DATA_SUB_STATE
+			ljmp serial_service_end											; jump to end
+		gps_wait_for_a_cont0:
+			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
+	serial_service_cont8:
+
+	; DO NOT SAVE LATITUDE OR LONGITUDE DATA
+	; ; Latitude
+	; ; GPS_WAIT_FOR_LATITUDE:
+	; cjne R3, #GPS_WAIT_FOR_LATITUDE, serial_service_cont9
+	; 	; NOTE: in this state, we change received ascii code to hex code by bitwise AND with mask: 00001111 = #0Fh.
+	; 	; ascii code for 0: #30h -> hex code for 0: #00h
+	; 	; ascii code for 1: #31h -> hex code for 1: #01h
+	; 	; ascii code for 2: #32h -> hex code for 1: #02h 
+	; 	; etc....
+	; 	xrl CALCULATED_GPS_CHECKSUM, a										; update the CALCULATED_GPS_CHECKSUM
+	; 	inc R4 																; increment R4
+	; 	cjne a, #2Eh, check_lat_for_comma									; check if "." was received
+	; 		ljmp serial_service_end											; if we receive a ".", we don't want to store it - jump to end
+	; 	check_lat_for_comma:
+	; 	cjne a, #2Ch, load_lat_data											; check if "," was received
+	; 		ljmp serial_service_end											; if we receive a ",", we don't want to store it - jump to end
+	; 	load_lat_data:														; keep loading data
+	; 	anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
+	; 	mov R0, GPS_POINTER
+	;	mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
+	; 	inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
+	; 	cjne R4, #0Bh, serial_service_end 									; check if R4 (number of times we have looped) is equal to 11 (11 = number of received bytes for llll.llll,a)
+	; 		; on the last latitude byte, we actually don't want to apply the 00001111 mask (the last byte is a letter), so re-write the final byte
+	; 		dec GPS_POINTER													; decrement pointer
+	; 		mov R0, GPS_POINTER
+	;		mov @R0, SBUF													; re-write ascii data (letter) into @R0
+	; 		inc GPS_POINTER													; update pointer
+	; 		mov GPS_WAIT_TIME, #01h											; wait out "," (1 byte)
+	; 		mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_LONGITUDE		; load next state for after un-needed byte(s) are received
+	; 		; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #0Bh 						; load next state for after un-needed byte(s) are received
+	; 		mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; update GPS_OBTAIN_DATA_SUB_STATE
+	; 		; mov GPS_OBTAIN_DATA_SUB_STATE, #01h 							; update GPS_OBTAIN_DATA_SUB_STATE
+	; 		ljmp serial_service_end											; jump to end
+	; serial_service_cont9:
+
+	; ; Longitude
+	; ; GPS_WAIT_FOR_LONGITUDE:
+	; cjne R3, #GPS_WAIT_FOR_LONGITUDE, serial_service_cont10
+	; 	; NOTE: in this state, we change received ascii code to hex code by bitwise AND with mask: 00001111 = #0Fh.
+	; 	; ascii code for 0: #30h -> hex code for 0: #00h
+	; 	; ascii code for 1: #31h -> hex code for 1: #01h
+	; 	; ascii code for 2: #32h -> hex code for 1: #02h 
+	; 	; etc....
+	; 	xrl CALCULATED_GPS_CHECKSUM, a										; update the CALCULATED_GPS_CHECKSUM
+	; 	inc R4 																; increment R4
+	; 	cjne a, #2Eh, check_long_for_comma									; check if "." was received
+	; 		ljmp serial_service_end											; if we receive a ".", we don't want to store it - jump to end
+	; 	check_long_for_comma:
+	; 	cjne a, #2Ch, load_long_data										; check if "," was received
+	; 		ljmp serial_service_end											; if we receive a ",", we don't want to store it - jump to end
+	; 	load_long_data:														; keep loading data
+	; 	anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
+	; 	mov R0, GPS_POINTER
+	;	mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
+	; 	inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
+	; 	cjne R4, #0Ch, serial_service_end 									; check if R4 (number of times we have looped) is equal to 12 (12 = number of received bytes for yyyyy.yyyy,a)
+	; 		; on the last longitude byte, we actually don't want to apply the 00001111 mask (the last byte is a letter), so re-write the final byte
+	; 		dec GPS_POINTER													; decrement pointer
+	; 		mov R0, GPS_POINTER
+	;		mov @R0, SBUF													; re-write ascii data (letter) into @R0
+	; 		inc GPS_POINTER													; update pointer											
+	; 		mov GPS_WAIT_TIME, #0Dh											; wait out ",v.vv,ttt.tt," (13 bytes)
+	; 		mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_DATE			; load next state for after un-needed byte(s) are received
+	; 		mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; update GPS_OBTAIN_DATA_SUB_STATE
+	; 		ljmp serial_service_end											; jump to end
+	; serial_service_cont10:
+
+	; Date
+	; GPS_WAIT_FOR_DATE:
+	cjne R3, #GPS_WAIT_FOR_DATE, serial_service_cont11
+		; NOTE: in this state, we change received ascii code to hex code by bitwise AND with mask: 00001111 = #0Fh.
+		; ascii code for 0: #30h -> hex code for 0: #00h
+		; ascii code for 1: #31h -> hex code for 1: #01h
+		; ascii code for 2: #32h -> hex code for 1: #02h 
+		; etc....
+		xrl CALCULATED_GPS_CHECKSUM, a				 						; update the CALCULATED_GPS_CHECKSUM
+		inc R4 																; increment R4
+		anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
+		mov R0, GPS_POINTER
+		mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
+		inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
+		cjne R4, #06h, serial_service_end 									; check if R4 (number of times we have looped) is equal to 6 (6 = number of received bytes for ddmmyy)
+			mov GPS_WAIT_TIME, #04h											; wait out ",,,A" (4 bytes)
+			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_STAR			; load next state for after un-needed byte(s) are received
+			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #0Dh 						; load next state for after un-needed byte(s) are received
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; update GPS_OBTAIN_DATA_SUB_STATE
+			; mov GPS_OBTAIN_DATA_SUB_STATE, #01h 							; update GPS_OBTAIN_DATA_SUB_STATE
+			ljmp serial_service_end											; jump to end
+	serial_service_cont11:
+
+	; "*"
+	; GPS_WAIT_FOR_STAR:
+	cjne R3, #GPS_WAIT_FOR_STAR, serial_service_cont12
+		cjne a, #2Ah, serial_service_end	;3/14/2020 SHOULD THIS GO TO serial_reset_GPS_OBTAIN_DATA_SUB_STATE?????!!!!!!!!!!							; check if received serial data is "*"
+			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_CHECKSUM			; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			; mov GPS_OBTAIN_DATA_SUB_STATE, #0Eh 							; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
+			ljmp serial_service_end											; jump to end
+	serial_service_cont12:
+
+	; Checksum
+	; GPS_WAIT_FOR_CHECKSUM:
+	cjne R3, #GPS_WAIT_FOR_CHECKSUM, serial_service_cont13
+		inc R4 																; increment R4
+		lcall ASCII_TO_HEX 													; convert ascii to hex
+		cjne R4, #01h, append_low_nibble									; check if we received our first checksum byte
+			swap a 															; if this is our first checksum byte, we want to swap accumulator nibbles (i.e. #01h -> #10h)
+			mov RECEIVED_GPS_CHECKSUM, a 									; move partial result into RECEIVED_GPS_CHECKSUM
+			ljmp serial_service_end											; jump to end
+		append_low_nibble:
+			orl a, RECEIVED_GPS_CHECKSUM									; append the low nibble by bitwise OR (NOTE: the lower nibble of RECEIVED_GPS_CHECKSUM should be 0)!
+			mov RECEIVED_GPS_CHECKSUM, a 									; move the final result into RECEIVED_GPS_CHECKSUM
+			cjne a, CALCULATED_GPS_CHECKSUM, serial_reset_GPS_OBTAIN_DATA_SUB_STATE		; compare RECEIVED_GPS_CHECKSUM (which should still be in a) with the CALCULATED_GPS_CHECKSUM
+				; HAVE RECEIVED COMPLETE GPS NMEA $GPRMC SENTENCE
+				setb P1.7 													; turn on GPS SYNC light
+				lcall LOAD_GPS_DATA 										; load values into SECONDS, MINUTES, HOURS, DAY, MONTH, and YEAR registers 
+				; lcall ENTER_GPS_SET_TIMEZONE_STATE 							; update GPS_SYNC_SUB_STATE
+				lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+				sjmp serial_service_end 									; jump to end
+	serial_service_cont13:
+
+	; Reset
+	serial_reset_GPS_OBTAIN_DATA_SUB_STATE:
+		mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_DOLLAR					; Reset GPS_OBTAIN_DATA_SUB_STATE
+		; mov GPS_OBTAIN_DATA_SUB_STATE, #02h								; Reset GPS_OBTAIN_DATA_SUB_STATE
+		mov GPS_POINTER, #08h 												; load GPS_POINTER (pointer) with memory address of RECEIVED_GPS_HRS_TENS
+
+	; End
+	serial_service_end:
+
+	; pop registers/accumulator
+	pop 4
+	pop 3
+	pop 0
+	pop acc 
+ret
+
 ; ====== State Transition Functions ======
 CHECK_FOR_ROT_ENC_SHORT_PRESS:
 	; This function is used to transisiton between sub-states, such as SET_MM, SET_DD, etc. in SET_TIME_STATE
@@ -1130,10 +1461,8 @@ SHOW_TIME_STATE_TO_SHOW_ALARM_STATE:
 ret
 
 SHOW_TIME_STATE_TO_SET_TIME_STATE:
-	; set timeout (59 seconds)
-	; mov TIMEOUT_LENGTH, #3Bh
-	; lcall ADJUST_TIMEOUT
-	mov TIMEOUT_LENGTH, #3Bh
+	; set timeout (60 seconds)
+	mov TIMEOUT_LENGTH, #3Ch
 	mov TIMEOUT, TIMEOUT_LENGTH
 
 	clr ROT_FLAG					; clear the ROT_FLAG
@@ -1142,7 +1471,6 @@ SHOW_TIME_STATE_TO_SET_TIME_STATE:
 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
 	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
 	setb EX0						; enable external interrupt 0
-	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
 	setb EX1						; enable external interrupt 1
 
 	; Update SET_TIME_SUB_STATE
@@ -1179,7 +1507,6 @@ SHOW_ALARM_STATE_TO_SET_ALARM_STATE:
 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
 	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
 	setb EX0						; enable external interrupt 0
-	;mov IP, #01h 					; make timer external interrpt 0 (update time) highest priority
 	setb EX1						; enable external interrupt 1
 
 	; Update SET_ALARM_SUB_STATE
@@ -1238,6 +1565,34 @@ SHOW_ALARM_STATE_TO_SHOW_TIME_STATE:
 	mov CLOCK_STATE, #SHOW_TIME_STATE
 ret
 
+GPS_SYNC_STATE_TO_SHOW_TIME_STATE:
+	; disable the GPS 	
+	clr P1.2
+
+	; == This is how to configure timers going into GPS_SET_TIMEZONE_STATE:
+	; [x] Timer 0 keeps track of time (for timeout) and decatron flashes
+	; [x] Timer 1 not used
+	; [x] Timer 2 does update displays
+	; Disable timer 1
+	clr TR1 				; stop timer 1
+	clr ET1					; disable timer 1 overflow Interrupt
+
+	; Serial port initialization (mode 0 - synchronous serial communication)
+	mov SCON, #00h 			; initialize the serial port in mode 0
+
+	; Turn on the VFD
+	clr VFD_PAUSED?
+
+	; make timer 0 and timer 2 interrupts highest priority
+	mov IP, #22h
+
+	; update DECA_STATE
+	lcall ENTER_DECA_COUNTING_SECONDS_STATE
+
+	; update CLOCK_STATE
+	mov CLOCK_STATE, #SHOW_TIME_STATE
+ret
+
 ENTER_GPS_SYNC_STATE:
 	; set timeout (120 seconds)
 	mov TIMEOUT_LENGTH, #78h
@@ -1268,16 +1623,16 @@ ENTER_GPS_SYNC_STATE:
 	setb P3.5						; load the MAX6921
 	clr P3.5						; latch the MAX6921
 
-	; put decatron into DECA_RADAR_STATE
+	; update DECA_STATE
 	lcall ENTER_DECA_RADAR_STATE
 
 	; make serial ISR highest priority
 	; DO THIS IN OBTAIN DATA INIT
 
-	; This is how to configure timers going into GPS_OBTAIN_FIX_STATE:
-		; [x] Timer 0 keeps track of time (for timeout) and also does radar mode
-		; [x] Timer 1 is configured to LPF GPS fix signal to detect when a fix is found
-		; [x] Timer 2 does update displays
+	; == This is how to configure timers going into GPS_OBTAIN_FIX_STATE:
+	; [x] Timer 0 keeps track of time (for timeout) and also does radar mode
+	; [x] Timer 1 is configured to LPF GPS fix signal to detect when a fix is found
+	; [x] Timer 2 does update displays
 
 	; Configure timer 1 in 16 bit mode (NOT auto-reload) - For counting GPS fix LOW level duration (when GPS has a fix, GPS fix pin is constantly low)
 	; Interrupt initialization
@@ -1449,17 +1804,88 @@ ret
 
 ; GPS_SYNC sub-state transitions =========
 ENTER_GPS_OBTAIN_DATA_STATE:
-	; == GPS OBTAIN DATA 
-	; Timer 0 keeps track of time (for timeout) and also does radar mode
-	; Timer 1 is used to set baud rate if a fix is found before 2 minutes expires
-	; Timer 2 does update displays
+	; set timeout (120 seconds)
+	mov TIMEOUT_LENGTH, #78h
+	mov TIMEOUT, TIMEOUT_LENGTH
+
+	; make serial port interrupt highest priority
+	mov IP, #10h
+
+	; Stop timer 1
+	clr TR1 			; stop timer 1
+	clr ET1				; clear timer 1 overflow Interrupt
+
+	; == This is how to configure timers going into GPS_OBTAIN_DATA_STATE: 
+	; [x] Timer 0 keeps track of time (for timeout) and also does radar mode
+	; [x] Timer 1 is used to set baud rate
+	; [x] Timer 2 does update displays
+
+	; Configure timer 1 in auto-reload mode (mode 2) - For baud rate generation.
+	; Keep timer 0 counting seconds
+	; NOTE: high nibble of TMOD is for timer 1, low nibble is for timer 0
+	mov TMOD, #26h
+	; Initialize TH1 for 9600 baud
+	mov TH1, #0FDh
+	; Start timer 1
+	setb TR1
+
+	; Configure serial port to operate in mode 1 (8 bit UART with baud rate set by timer 1), with receive enabled
+	mov SCON, #50h		; mode 1, receive enabled
+	; Enable serial interrupt
+	setb ES
+
+	; Initialize data pointer
+	mov GPS_POINTER, #08h  						; load GPS_POINTER with memory address of RECEIVED_GPS_HRS_TENS
+
+	; update how fast decatron spins?
+
+	; update GPS_OBTAIN_DATA_SUB_STATE
+	mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_DOLLAR
+
+	; update GPS_SYNC_SUB_STATE
+	mov GPS_SYNC_SUB_STATE, #GPS_OBTAIN_DATA_STATE
+
 ret
 
 ENTER_GPS_SET_TIMEZONE_STATE:
-	; == GPS SET TIMEZONE
-	; Timer 0 keeps track of time (for timeout) and decatron flashes
-	; Timer 1 not used
-	; Timer 2 does update displays
+	; set timeout (60 seconds)
+	mov TIMEOUT_LENGTH, #3Ch
+	mov TIMEOUT, TIMEOUT_LENGTH
+
+	; disable the GPS 	
+	clr P1.2
+
+	; == This is how to configure timers going into GPS_SET_TIMEZONE_STATE:
+	; [x] Timer 0 keeps track of time (for timeout) and decatron flashes
+	; [x] Timer 1 not used
+	; [x] Timer 2 does update displays
+	; Disable timer 1
+	clr TR1 				; stop timer 1
+	clr ET1					; disable timer 1 overflow Interrupt
+
+	; Serial port initialization (mode 0 - synchronous serial communication)
+	mov SCON, #00h 			; initialize the serial port in mode 0
+
+	; Turn on the VFD
+	clr VFD_PAUSED?
+
+	; make timer 0 and timer 2 interrupts highest priority
+	mov IP, #22h
+
+	; enable external interrupts for rotary encoder
+	; initalize external interrupts for rotary encoder
+	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
+	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
+	setb EX0						; enable external interrupt 0
+	setb EX1						; enable external interrupt 1
+
+	clr ROT_FLAG					; clear the ROT_FLAG
+
+	; update DECA_STATE
+	lcall ENTER_DECA_FLASHING_STATE
+
+	; update GPS_SYNC_SUB_STATE
+	mov GPS_SYNC_SUB_STATE, #GPS_SET_TIMEZONE_STATE
 ret
 
 ; ========================================
@@ -2035,7 +2461,7 @@ DECA_TOGGLE:
 	mov DECA_LOAD_STATE, R3 					; update DECA_LOAD_STATE
 
 	deca_toggle_cont1:
-ret 											; exit
+ret
 
 DECA_RESET:
 	mov DECA_LOAD_STATE, #00h   			; initialize the decatron
@@ -2448,6 +2874,101 @@ YY_ADJ:
 	set_yy_cont0:
 ret
 
+ASCII_TO_HEX:
+	; this routine is used for the GPS checksum
+	; this routine takes a received ascii number/letter: 0 through F, and turns it into its hex equivalent:
+	; (in)  ------- (out)
+	; (acc) ------- (acc)
+	; ASCII ------- HEX 
+	; #30h	....... #00h
+	; #31h	....... #01h
+	; #32h	....... #02h
+	; #33h	....... #03h
+	; #34h	....... #04h
+	; #35h	....... #05h
+	; #36h	....... #06h
+	; #37h	....... #07h
+	; #38h	....... #08h
+	; #39h	....... #09h
+	; #41h	....... #0Ah
+	; #42h	....... #0Bh
+	; #43h	....... #0Ch
+	; #44h	....... #0Dh
+	; #45h	....... #0Eh
+	; #46h	....... #0Fh
+	push 0
+
+	mov R0, a 					; save orignial a value in R0
+	clr c 						; clear the carry flag
+	subb a, #39h 				; compare the received SBUF (ascii) with #39h.  if the received data is less than #39h, then the carry flag is set
+	jnc convert_alpha			; if the carry flag is NOT set, we are dealing with A, B, C, D, E, or F
+		mov a, R0				; restore original a value
+		anl a, #0Fh 			; convert numeric ascii to hex code
+		ljmp ascii_to_hex_end	; jump to end
+	convert_alpha:				
+		mov a, R0				; restore original a value
+		;subb a, #37h			; convert alpha ascii to hex code
+
+	ascii_to_hex_end:
+
+	pop 0
+ret
+
+LOAD_GPS_DATA:
+	; this function is used to load the received GPS data into the SECONDS, MINUTES, HOURS, DAY, MONTH, and YEAR registers.
+	
+	; push registers (note: this function is called in an ISR)
+	; not pushing acc because it is pushed earlier
+	push b
+	push PSW
+
+	; load seconds
+	mov b, #0Ah 						; move 10 (dec) into b
+	mov a, RECEIVED_GPS_SECS_TENS		; move GPS data into accumulator
+	mul ab 								; multiply the xxx_TENS by 10
+	add a, RECEIVED_GPS_SECS_ONES 		; add the xxx_ONES to the product
+	mov SECONDS, a 						; load SECONDS with GPS data
+
+	; load minutes
+	mov b, #0Ah 						; move 10 (dec) into b
+	mov a, RECEIVED_GPS_MINS_TENS 		; move GPS data into accumulator
+	mul ab 								; multiply the xxx_TENS by 10
+	add a, RECEIVED_GPS_MINS_ONES 		; add the xxx_ONES to the product
+	mov MINUTES, a 						; load MINUTES with GPS data
+
+	; load hours
+	mov b, #0Ah 						; move 10 (dec) into b
+	mov a, RECEIVED_GPS_HRS_TENS		; move GPS data into accumulator
+	mul ab								; multiply the xxx_TENS by 10
+	add a, RECEIVED_GPS_HRS_ONES		; add the xxx_ONES to the product
+	mov HOURS, a 						; load HOURS with GPS data
+
+	; load day
+	mov b, #0Ah 						; move 10 (dec) into b
+	mov a, RECEIVED_GPS_DAY_TENS		; move GPS data into accumulator
+	mul ab								; multiply the xxx_TENS by 10
+	add a, RECEIVED_GPS_DAY_ONES		; add the xxx_ONES to the product
+	mov DAY, a 							; load DAY with GPS data
+
+	; load month
+	mov b, #0Ah 						; move 10 (dec) into b
+	mov a, RECEIVED_GPS_MONTH_TENS		; move GPS data into accumulator
+	mul ab								; multiply the xxx_TENS by 10
+	add a, RECEIVED_GPS_MONTH_ONES		; add the xxx_ONES to the product
+	mov MONTH, a 						; load MONTH with GPS data
+
+	; load year
+	mov b, #0Ah 						; move 10 (dec) into b
+	mov a, RECEIVED_GPS_YEAR_TENS		; move GPS data into accumulator
+	mul ab								; multiply the xxx_TENS by 10
+	add a, RECEIVED_GPS_YEAR_ONES		; add the xxx_ONES to the product
+	mov YEAR, a 						; load YEAR with GPS data
+
+
+	pop PSW
+	pop b
+ret
+
 SHORT_DELAY:
 	push 0 					; push R0 onto the stack to preserve its value
 	
@@ -2491,23 +3012,6 @@ LONG_DELAY:
 	pop 1
 	pop 0
 ret
-
-; ADJUST_TIMEOUT:
-; 	push acc
-; 	push b
-; 	push PSW
-
-; 	; set timeout (length refers to TIMEOUT_LENGTH)
-; 	mov a, SECONDS 			; move SECONDS into acc 
-; 	mov b, #3Ch 			; move 60 (dec) into b
-; 	add a, TIMEOUT_LENGTH 	; add the reload timeout length to the acc
-; 	div ab 					; divide a by b
-; 	mov TIMEOUT, b  ; move b (the remainder from above) into TIMEOUT
-
-; 	pop PSW
-; 	pop b
-; 	pop acc
-; ret
 
 
 end

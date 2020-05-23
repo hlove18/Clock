@@ -141,7 +141,7 @@ ljmp MAIN
 
 GPS_OBTAIN_FIX_INIT:
 	; Use timer 0 for GPS "FIX" pin (in the main clock program, timer 0 is used to update time - i.e. count seconds.  This is not needed during sync)
-	; Use timer 1 for ~2 min timeout
+	; Use timer 1 for ~2min timeout
 
 	; Interrupt initialization
 	setb EA 				; enable interrupts
@@ -149,7 +149,7 @@ GPS_OBTAIN_FIX_INIT:
 	setb ET1				; enable timer 1 overflow Interrupt
 
 	; Configure timer 0 in 16 bit mode (NOT autoreload) - For counting GPS fix LOW level duration (when GPS has a fix, GPS fix pin is constantly low)
-	; Configure timer 1 in auto-reload mode (mode 2) - For baud rate generation.
+	; Configure timer 1 in auto-reload mode (mode 2) - For timeout.
 	; NOTE: high nibble of TMOD is for timer 1, low nibble is for timer 0
 	mov TMOD, #11h
 	; Initialize TL0 and TH0 for timer 0 16 bit timing for maximum count
@@ -183,7 +183,7 @@ GPS_OBTAIN_DATA_INIT:
 	; Stop timer 1
 	clr TR1
 	; Configure serial port to operate in mode 1 (8 bit UART with baud rate set by timer 1), with receive enabled
-	mov SCON, #50h		;mode 1, receive enabled
+	mov SCON, #50h		; mode 1, receive enabled
 	; Enable serial interrupt
 	setb ES
 	clr ET0				; clear timer 0 overflow interrupt
