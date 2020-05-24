@@ -458,6 +458,9 @@ INIT:
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	mov SCON, #00h 		; initialize the serial port in mode 0
+
+
+	lcall ENTER_GPS_SYNC_STATE
 sjmp MAIN
 
 MAIN:
@@ -1067,14 +1070,14 @@ ret
 SERIAL_SERVICE:
 	; Uses a to store the received SBUF data
 	; Uses R3 to store the GPS_OBTAIN_DATA_SUB_STATE
-	; Uses R4 as a counter (for loops)
+	; Uses R6 as a counter (for loops)
 	; Uses R0 as a data pointer
 	
 	; push registers/accumulator
 	push acc 
 	push 0
 	push 3
-	push 4
+	; do NOT push or pop R6 -- this value needs to be retained between serial interrupts
 
 	; NMEA $GPRMC sentence after fix:
 	; $GPRMC,hhmmss.sss,A,llll.llll,a,yyyyy.yyyy,a,v.vv,ttt.tt,ddmmyy,,,A*77
@@ -1087,7 +1090,7 @@ SERIAL_SERVICE:
 	; Wait uses GPS_WAIT_TIME to determine how many received bytes to wait out
 	; GPS_WAIT:
 	cjne R3, #GPS_WAIT, serial_service_cont0
-		mov R4, #00h 														; R4 keeps track of how many times things loop (like how long to loop in the GPS_WAIT_FOR_TIME state)	
+		mov R6, #00h 														; R6 keeps track of how many times things loop (like how long to loop in the GPS_WAIT_FOR_TIME state)	
 		xrl CALCULATED_GPS_CHECKSUM, a										; keep updating the CALCULATED_GPS_CHECKSUM
 		djnz GPS_WAIT_TIME, gps_wait_cont0									; decrement until done waiting
 			mov GPS_OBTAIN_DATA_SUB_STATE, GPS_OBTAIN_DATA_NEXT_SUB_STATE	; if wait is over, load GPS_OBTAIN_DATA_SUB_STATE with the next state.
@@ -1177,12 +1180,12 @@ SERIAL_SERVICE:
 		; ascii code for 2: #32h -> hex code for 1: #02h
 		; etc....
 		xrl CALCULATED_GPS_CHECKSUM, a 		  								; update the CALCULATED_GPS_CHECKSUM
-		inc R4 																; increment R4
+		inc R6 																; increment R6
 		anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
 		mov R0, GPS_POINTER
 		mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
 		inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
-		cjne R4, #06h, gps_wait_for_time_cont0	 							; check if R4 (number of times we have looped) is equal to 6 (6 = number of received bytes for HH MM SS)
+		cjne R6, #06h, gps_wait_for_time_cont0	 							; check if R6 (number of times we have looped) is equal to 6 (6 = number of received bytes for HH MM SS)
 			mov GPS_WAIT_TIME, #05h											; wait out ".000," (5 bytes)
 			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_A 			; load next state for after un-needed byte(s) are received
 			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #09h 		 				; load next state for after un-needed byte(s) are received
@@ -1220,7 +1223,7 @@ SERIAL_SERVICE:
 	; 	; ascii code for 2: #32h -> hex code for 1: #02h 
 	; 	; etc....
 	; 	xrl CALCULATED_GPS_CHECKSUM, a										; update the CALCULATED_GPS_CHECKSUM
-	; 	inc R4 																; increment R4
+	; 	inc R6 																; increment R6
 	; 	cjne a, #2Eh, check_lat_for_comma									; check if "." was received
 	; 		ljmp serial_service_end											; if we receive a ".", we don't want to store it - jump to end
 	; 	check_lat_for_comma:
@@ -1231,7 +1234,7 @@ SERIAL_SERVICE:
 	; 	mov R0, GPS_POINTER
 	;	mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
 	; 	inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
-	; 	cjne R4, #0Bh, serial_service_end 									; check if R4 (number of times we have looped) is equal to 11 (11 = number of received bytes for llll.llll,a)
+	; 	cjne R6, #0Bh, serial_service_end 									; check if R6 (number of times we have looped) is equal to 11 (11 = number of received bytes for llll.llll,a)
 	; 		; on the last latitude byte, we actually don't want to apply the 00001111 mask (the last byte is a letter), so re-write the final byte
 	; 		dec GPS_POINTER													; decrement pointer
 	; 		mov R0, GPS_POINTER
@@ -1254,7 +1257,7 @@ SERIAL_SERVICE:
 	; 	; ascii code for 2: #32h -> hex code for 1: #02h 
 	; 	; etc....
 	; 	xrl CALCULATED_GPS_CHECKSUM, a										; update the CALCULATED_GPS_CHECKSUM
-	; 	inc R4 																; increment R4
+	; 	inc R6 																; increment R6
 	; 	cjne a, #2Eh, check_long_for_comma									; check if "." was received
 	; 		ljmp serial_service_end											; if we receive a ".", we don't want to store it - jump to end
 	; 	check_long_for_comma:
@@ -1265,7 +1268,7 @@ SERIAL_SERVICE:
 	; 	mov R0, GPS_POINTER
 	;	mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
 	; 	inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
-	; 	cjne R4, #0Ch, serial_service_end 									; check if R4 (number of times we have looped) is equal to 12 (12 = number of received bytes for yyyyy.yyyy,a)
+	; 	cjne R6, #0Ch, serial_service_end 									; check if R6 (number of times we have looped) is equal to 12 (12 = number of received bytes for yyyyy.yyyy,a)
 	; 		; on the last longitude byte, we actually don't want to apply the 00001111 mask (the last byte is a letter), so re-write the final byte
 	; 		dec GPS_POINTER													; decrement pointer
 	; 		mov R0, GPS_POINTER
@@ -1283,15 +1286,15 @@ SERIAL_SERVICE:
 		; NOTE: in this state, we change received ascii code to hex code by bitwise AND with mask: 00001111 = #0Fh.
 		; ascii code for 0: #30h -> hex code for 0: #00h
 		; ascii code for 1: #31h -> hex code for 1: #01h
-		; ascii code for 2: #32h -> hex code for 1: #02h 
+		; ascii code for 2: #32h -> hex code for 2: #02h 
 		; etc....
 		xrl CALCULATED_GPS_CHECKSUM, a				 						; update the CALCULATED_GPS_CHECKSUM
-		inc R4 																; increment R4
+		inc R6 																; increment R6
 		anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
 		mov R0, GPS_POINTER
 		mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
 		inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
-		cjne R4, #06h, serial_service_end 									; check if R4 (number of times we have looped) is equal to 6 (6 = number of received bytes for ddmmyy)
+		cjne R6, #06h, serial_service_end 									; check if R6 (number of times we have looped) is equal to 6 (6 = number of received bytes for ddmmyy)
 			mov GPS_WAIT_TIME, #04h											; wait out ",,,A" (4 bytes)
 			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_STAR			; load next state for after un-needed byte(s) are received
 			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #0Dh 						; load next state for after un-needed byte(s) are received
@@ -1312,9 +1315,9 @@ SERIAL_SERVICE:
 	; Checksum
 	; GPS_WAIT_FOR_CHECKSUM:
 	cjne R3, #GPS_WAIT_FOR_CHECKSUM, serial_service_cont13
-		inc R4 																; increment R4
+		inc R6 																; increment R6
 		lcall ASCII_TO_HEX 													; convert ascii to hex
-		cjne R4, #01h, append_low_nibble									; check if we received our first checksum byte
+		cjne R6, #01h, append_low_nibble									; check if we received our first checksum byte
 			swap a 															; if this is our first checksum byte, we want to swap accumulator nibbles (i.e. #01h -> #10h)
 			mov RECEIVED_GPS_CHECKSUM, a 									; move partial result into RECEIVED_GPS_CHECKSUM
 			ljmp serial_service_end											; jump to end
@@ -1340,7 +1343,7 @@ SERIAL_SERVICE:
 	serial_service_end:
 
 	; pop registers/accumulator
-	pop 4
+	; do NOT push or pop R6
 	pop 3
 	pop 0
 	pop acc 
@@ -1831,6 +1834,9 @@ ENTER_GPS_OBTAIN_DATA_STATE:
 
 	; Configure serial port to operate in mode 1 (8 bit UART with baud rate set by timer 1), with receive enabled
 	mov SCON, #50h		; mode 1, receive enabled
+	; Clear RI and TI flags
+	; clr RI 				; clear recieve interrupt flag
+	; clr TI 				; clear transmit interrupt flag
 	; Enable serial interrupt
 	setb ES
 
