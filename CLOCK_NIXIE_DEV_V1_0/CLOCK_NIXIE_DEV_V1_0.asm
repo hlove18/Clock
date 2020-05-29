@@ -104,6 +104,14 @@ INIT:
 	; Pull P1.3 HIGH (input used for GPS fix)
 	setb P1.3
 
+	; bits:
+	.equ GPS_PRESENT?,  24h.0
+	.equ TIMEZONE_SET?, 24h.1
+
+	; fill in with values
+	clr GPS_PRESENT?
+	clr TIMEZONE_SET?
+
 	; GPS Sync Sub-State Variable:
 	.equ GPS_SYNC_SUB_STATE, 77h
 
@@ -133,11 +141,17 @@ INIT:
 	mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_DOLLAR
 	mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_G
 
+	.equ GPS_FIX_HIGH_TIMEOUT, 6Fh
+	.equ TIMEZONE, 70h 							; TIMEZONE variable holds the offset from UTC minus 11 hours.
+												; Therefore, UTC is TIMEZONE = #0Bh.  US east coast is either UTC-4 or UTC-5 hours depending on
+												; time of year due to daylights savings, so TIMEZONE will normally be #07h (UTC-4) or #06h (UTC-5).
 	.equ GPS_POINTER, 71h
 	.equ GPS_FIX_LPF, 72h
 	.equ CALCULATED_GPS_CHECKSUM, 73h
 	.equ GPS_WAIT_TIME, 74h
 	mov GPS_POINTER, #08h  						; load GPS_POINTER with memory address of RECEIVED_GPS_HRS_TENS
+	mov TIMEZONE, #0Bh 							; default to UTC
+	mov GPS_FIX_HIGH_TIMEOUT, #020h 			; load 32 (dec) into GPS_FIX_HIGH_TIMEOUT
 
 	; ====== Received GPS Variables ======
 	; !!!!!!! IMPORTANT: DO NOT MOVE THESE MEMORY LOCATIONS (pointers are used to update)
@@ -568,7 +582,7 @@ SHOW_TIME:
 	mov NIX2, MIN_TENS
 	mov NIX1, MIN_ONES
 
-	; mov DECATRON, SECONDS 			; TODO:  this should probably be taken care of in the decatron state machine, not here
+	; mov DECATRON, SECONDS --> This is taken care of in the decatron state machine
 
 	; listen for rotary encoder press
 	mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
@@ -582,9 +596,6 @@ SHOW_TIME:
 	cjne a, #SET_TIME_STATE, show_time_cont1
 		lcall SHOW_TIME_STATE_TO_SET_TIME_STATE
 	show_time_cont1:
-
-	; change state if needed
-	; mov CLOCK_STATE, NEXT_CLOCK_STATE	
 ret
 
 SET_TIME:    ; has a sub-state machine with state variable SET_ALARM_SUB_STATE
@@ -648,7 +659,7 @@ SHOW_ALARM:
 	mov NIX2, MIN_TENS
 	mov NIX1, MIN_ONES
 
-	; mov DECATRON, SECONDS 		; TODO:  this should be handled in decatron state machine
+	; mov DECATRON, SECONDS --> This is taken care of in decatron state machine
 
 	; listen for rotary encoder press
 	mov NEXT_CLOCK_STATE, #SHOW_ALARM_STATE
@@ -701,6 +712,7 @@ SET_ALARM:  ; has a sub-state machine with state variable SET_ALARM_SUB_STATE
 ret
 
 GPS_SYNC: 	; has a sub-state machine with state variable GPS_SYNC_SUB_STATE
+
 	mov a, GPS_SYNC_SUB_STATE
 
 	cjne a, #GPS_OBTAIN_FIX_STATE, gps_sync_cont0
@@ -716,14 +728,6 @@ GPS_SYNC: 	; has a sub-state machine with state variable GPS_SYNC_SUB_STATE
 	cjne a, #GPS_SET_TIMEZONE_STATE, gps_sync_cont2
 		lcall GPS_SET_TIMEZONE
 	gps_sync_cont2:
-
-	; Check for timeout event
-	mov a, TIMEOUT
-	cjne a, #00h, gps_sync_cont3
-	; mov a, SECONDS
-	; cjne a, TIMEOUT, gps_sync_cont3
-		lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
-	gps_sync_cont3:
 ret
 
 ; ===== Set Time Sub-State Functions =======
@@ -848,15 +852,174 @@ ret
 ; ===== GPS Sync Sub-State Functions ======
 
 GPS_OBTAIN_FIX:
-	; there is nothing to do here. Everything is handled by interrupts.
+	; Display hours and minutes.  Everything else is taken care of in interrupt-driven code.
+
+	; Update the hours if 12/24 hour switch is flipped
+	mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
+
+	; Split the minutes
+	mov a, MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	;mov NIX4, HR_TENS --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	;mov NIX3, HR_ONES --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, gps_obtain_fix_cont1
+		; check the state of GPS_PRESENT? bit
+		jnb GPS_PRESENT?, gps_obtain_fix_cont1
+			; if there is a GPS present, check the state of TIMZONE_SET? bit
+			jnb TIMEZONE_SET?, gps_obtain_fix_cont2
+				; TIMEZONE has been set:
+				lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+				sjmp gps_obtain_fix_cont0
+			gps_obtain_fix_cont2:
+				; TIMEZONE has not been set AND there is a GPS present:
+				lcall ENTER_GPS_SET_TIMEZONE_STATE
+				sjmp gps_obtain_fix_cont0
+	gps_obtain_fix_cont1:
+
+	; Check for timeout event
+	mov a, TIMEOUT
+	cjne a, #00h, gps_obtain_fix_cont0
+		; check if timezone has been set yet
+		jnb TIMEZONE_SET?, gps_obtain_fix_cont3
+			; TIMEZONE_SET? bit is set:
+			lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE 		; go to SHOW_TIME_STATE
+			sjmp gps_obtain_fix_cont0
+		gps_obtain_fix_cont3:
+			; TIMEZONE_SET? bit is not set:
+			lcall ENTER_GPS_SET_TIMEZONE_STATE 				; go to GPS_SET_TIMEZONE_STATE
+	gps_obtain_fix_cont0:
 ret
 
 GPS_OBTAIN_DATA:
-	; there is nothing to do here. Everything is handled by interrupts.
+	; Display hours and minutes.  Everything else is taken care of in interrupt-driven code.
+
+	; Update the hours if 12/24 hour switch is flipped
+	mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
+
+	; Split the minutes
+	mov a, MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	;mov NIX4, HR_TENS --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	;mov NIX3, HR_ONES --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, gps_obtain_data_cont1
+		; check the state of TIMZONE_SET? bit
+		jnb TIMEZONE_SET?, gps_obtain_data_cont2
+				; TIMEZONE has been set:
+				lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+				sjmp gps_obtain_data_cont0
+			gps_obtain_data_cont2:
+				; TIMEZONE has not been set AND there is a GPS present:
+				lcall ENTER_GPS_SET_TIMEZONE_STATE
+				sjmp gps_obtain_data_cont0
+	gps_obtain_data_cont1:
+
+	; Check for timeout event
+	mov a, TIMEOUT
+	cjne a, #00h, gps_obtain_data_cont0
+		; check if timezone has been set yet
+		jnb TIMEZONE_SET?, gps_obtain_data_cont3
+			; TIMEZONE_SET? bit is set:
+			lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE 		; go to SHOW_TIME_STATE
+			sjmp gps_obtain_data_cont0
+		gps_obtain_data_cont3:
+			; TIMEZONE_SET? bit is not set:
+			lcall ENTER_GPS_SET_TIMEZONE_STATE 				; go to GPS_SET_TIMEZONE_STATE
+	gps_obtain_data_cont0:
 ret
 
 GPS_SET_TIMEZONE:
+	; ; Update the hours if 12/24 hour switch is flipped
+	; mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	; lcall TWLV_TWFR_HOUR_ADJ
 
+	; Split the minutes
+	mov a, MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	; Display the timezone offset
+	; grids 4 through 9 are set in ENTER_GPS_SET_TIMEZONE_STATE
+	mov a, TIMEZONE
+	clr c
+	subb a, #0Bh
+	jnc gps_set_timezone_cont2
+		; UTC offset is negative, accumulator now holds 256 minus the negative offset
+		mov GRID3, #0Ah 			; display '-' as a negative sign on grid 3
+		; get negative offset into accumulator by subtracting in opposite order
+		clr c
+		mov a, #0Bh
+		subb a, TIMEZONE 			; accumulator now holds UTC negative offset
+		sjmp gps_set_timezone_cont3
+	gps_set_timezone_cont2:
+		; UTC offset is positive, accumulator now holds it
+		mov GRID3, #0FFh 			; blank grid 3
+
+	gps_set_timezone_cont3:
+	; the accumulator holds the UTC offset (either positive or negative), and the negative sign is already displayed / not displayed in grid 3
+	; display the UTC offset
+	mov b, #0Ah
+	div ab
+	mov GRID2, a
+	mov GRID1, b
+
+	; display the minutes
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	; calculate the hours with the UTC offset applied
+	mov a, TIMEZONE
+	add a, HOURS 					; add HOURS to TIMEZONE
+	clr c
+	subb a, #0Bh 					; remove the offset of TIMEZONE
+	jnc gps_set_timezone_cont4 		; determine if the hours rolled under
+		; the hours rolled under, so wrap it around to 23 again
+		add a, #18h 				; add 24 (dec) to the accumulator to get the result within 0 and 23
+		sjmp gps_set_timezone_cont5
+
+	gps_set_timezone_cont4:
+	; the hours did not roll under, so check if the hours rolled over
+	clr c
+	subb a, #18h 					; subtract 24 (dec) from the accumulator to determine if a is between 0 and 23 or above 23
+	jnc gps_set_timezone_cont5
+		; add 24 (dec) back to the total to get the proper hours with UTC offset applied
+		add a, #18h 				; add 24 (dec) to the accumulator to get the result within 0 and 23
+
+	gps_set_timezone_cont5:
+	; the hours with the UTC offset applied are in the accumulator and ready to display
+	mov b, #0Ah
+	div ab
+	mov NIX4, a
+	mov NIX3, b
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, gps_set_timezone_cont0
+		setb TIMEZONE_SET? 								; indicate that the timezone has been set
+		lcall APPLY_TIMEZONE_TO_UTC 					; apply the set timezone to the current time registers which are holding UTC time
+		lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	gps_set_timezone_cont0:
 ret
 
 ; ========= Alarm State Functions ==========
@@ -1013,6 +1176,12 @@ TIMER_0_SERVICE:
 		cjne a, #SHOW_TIME_STATE, timer_0_serivce_cont11
 			sjmp timer_0_service_cont12
 		timer_0_serivce_cont11:
+		; check if CLOCK_STATE = GPS_SYNC_STATE and if GPS_SYNC_SUB_STATE = GPS_SET_TIMEZONE_STATE, in which case timeouts are inactive
+		cjne a, #GPS_SYNC_STATE, timer_0_service_cont14
+			mov a, GPS_SYNC_SUB_STATE
+			cjne a, #GPS_SET_TIMEZONE_STATE, timer_0_service_cont14
+				sjmp timer_0_service_cont12
+		timer_0_service_cont14:
 		dec TIMEOUT 			; decrement TIMEOUT (will check if TIMEOUT = 0 in the respective state)
 		timer_0_service_cont12:
 
@@ -1041,6 +1210,7 @@ TIMER_0_SERVICE:
 				mov R6, HOURS
 				cjne R6, #18h, timer_0_service_cont1  ; if hours is 24 decimal, new day
 					mov HOURS, #00h
+					lcall INCREMENT_DAY
 	timer_0_service_cont1:
 
 	; pop the original SFR values back into their place and restore their values
@@ -1055,12 +1225,18 @@ TIMER_1_SERVICE:
 	mov TL1, #00h
 	mov TH1, #00h
 
-	jnb P1.3, timer_1_service_cont0		; check if GPS fix is HIGH/LOW
+	jnb P1.3, timer_1_service_cont0					; check if GPS fix is HIGH/LOW
 		; if GPS fix is high
-		mov GPS_FIX_LPF, #14h			; if GPS fix his HIGH (i.e. no GPS fix), reload GPS_FIX_LPF with 20 (decimal)
-		ljmp timer_1_service_cont1		; jump to the end of the ISR
+		mov GPS_FIX_LPF, #14h						; if GPS fix is HIGH (i.e. no GPS fix), reload GPS_FIX_LPF with 20 (decimal)
+		djnz GPS_FIX_HIGH_TIMEOUT, timer_1_service_cont1
+			; if GPS fix stays high for ~15 seconds, assume there is no GPS connected and transition state:
+			; clr GPS_PRESENT?
+			lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+			ljmp timer_1_service_cont1				; jump to the end of the ISR
 	timer_1_service_cont0:
 		; if GPS fix is low:
+		setb GPS_PRESENT? 							; since GPS fix went low, we know there is a GPS present
+		mov GPS_FIX_HIGH_TIMEOUT, #020h 			; re-load 32 (dec) into GPS_FIX_HIGH_TIMEOUT
 		djnz GPS_FIX_LPF, timer_1_service_cont1
 			; GPS fix has been low for more than ~1.3 seconds
 			lcall ENTER_GPS_OBTAIN_DATA_STATE
@@ -1071,11 +1247,12 @@ SERIAL_SERVICE:
 	; Uses a to store the received SBUF data
 	; Uses R3 to store the GPS_OBTAIN_DATA_SUB_STATE
 	; Uses R6 as a counter (for loops)
-	; Uses R0 as a data pointer
+	; Uses R1 as a data pointer
 	
 	; push registers/accumulator
 	push acc 
-	push 0
+	; push 0
+	push 1
 	push 3
 	; do NOT push or pop R6 -- this value needs to be retained between serial interrupts
 
@@ -1090,7 +1267,8 @@ SERIAL_SERVICE:
 	; Wait uses GPS_WAIT_TIME to determine how many received bytes to wait out
 	; GPS_WAIT:
 	cjne R3, #GPS_WAIT, serial_service_cont0
-		mov R6, #00h 														; R6 keeps track of how many times things loop (like how long to loop in the GPS_WAIT_FOR_TIME state)	
+		mov R6, #00h 														; R6 keeps track of how many times things loop (like how long to loop
+																			; in the GPS_WAIT_FOR_TIME state)	
 		xrl CALCULATED_GPS_CHECKSUM, a										; keep updating the CALCULATED_GPS_CHECKSUM
 		djnz GPS_WAIT_TIME, gps_wait_cont0									; decrement until done waiting
 			mov GPS_OBTAIN_DATA_SUB_STATE, GPS_OBTAIN_DATA_NEXT_SUB_STATE	; if wait is over, load GPS_OBTAIN_DATA_SUB_STATE with the next state.
@@ -1103,7 +1281,6 @@ SERIAL_SERVICE:
 	cjne R3, #GPS_WAIT_FOR_DOLLAR, serial_service_cont1
 		cjne a, #24h, gps_wait_for_dollar_cont0								; check if received serial data is "$"
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_G					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
-			; inc GPS_OBTAIN_DATA_SUB_STATE 		 						; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
 		gps_wait_for_dollar_cont0:
 			ljmp serial_service_end											; jump to end
 	serial_service_cont1:
@@ -1112,9 +1289,9 @@ SERIAL_SERVICE:
 	; GPS_WAIT_FOR_G:
 	cjne R3, #GPS_WAIT_FOR_G, serial_service_cont2
 		cjne a, #47h, gps_wait_for_g_cont0									; check if received serial data is "G"
-			mov CALCULATED_GPS_CHECKSUM, a									; initialize the CALCULATED_GPS_CHECKSUM (check sum does NOT include the "$" or "*" delimiters)
+			mov CALCULATED_GPS_CHECKSUM, a									; initialize the CALCULATED_GPS_CHECKSUM (check sum does NOT include
+																			; the "$" or "*" delimiters)
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_P					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
-			; inc GPS_OBTAIN_DATA_SUB_STATE 								; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
 			ljmp serial_service_end											; jump to end
 		gps_wait_for_g_cont0:
 			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
@@ -1126,7 +1303,6 @@ SERIAL_SERVICE:
 		cjne a, #50h, gps_wait_for_p_cont0									; check if received serial data is "P"
 			xrl CALCULATED_GPS_CHECKSUM, a 									; update the CALCULATED_GPS_CHECKSUM
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_R					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
-			; inc GPS_OBTAIN_DATA_SUB_STATE 								; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
 			ljmp serial_service_end											; jump to end
 		gps_wait_for_p_cont0:
 			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
@@ -1138,7 +1314,6 @@ SERIAL_SERVICE:
 		cjne a, #52h, gps_wait_for_r_cont0									; check if received serial data is "R"
 			xrl CALCULATED_GPS_CHECKSUM, a 									; update the CALCULATED_GPS_CHECKSUM
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_M					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
-			; inc GPS_OBTAIN_DATA_SUB_STATE 								; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
 			ljmp serial_service_end											; jump to end
 		gps_wait_for_r_cont0:
 			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
@@ -1150,7 +1325,6 @@ SERIAL_SERVICE:
 		cjne a, #4Dh, gps_wait_for_m_cont0									; check if received serial data is "M"
 			xrl CALCULATED_GPS_CHECKSUM, a 									; update the CALCULATED_GPS_CHECKSUM
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_C					; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
-			; inc GPS_OBTAIN_DATA_SUB_STATE 								; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
 			ljmp serial_service_end											; jump to end
 		gps_wait_for_m_cont0:
 			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
@@ -1163,9 +1337,7 @@ SERIAL_SERVICE:
 			xrl CALCULATED_GPS_CHECKSUM, a 									; update the CALCULATED_GPS_CHECKSUM
 			mov GPS_WAIT_TIME, #01h											; wait out "," (one byte)
 			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_TIME			; load next state for after un-needed byte(s) are received
-			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #08h   					; load next state for after un-needed byte(s) are received
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
-			; mov GPS_OBTAIN_DATA_SUB_STATE, #01h							; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
 			ljmp serial_service_end											; jump to end
 		gps_wait_for_c_cont0:
 			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
@@ -1182,15 +1354,14 @@ SERIAL_SERVICE:
 		xrl CALCULATED_GPS_CHECKSUM, a 		  								; update the CALCULATED_GPS_CHECKSUM
 		inc R6 																; increment R6
 		anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
-		mov R0, GPS_POINTER
-		mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
+		mov R1, GPS_POINTER
+		mov @R1, a 															; move the data in a into location GPS_POINTER is pointing
 		inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
-		cjne R6, #06h, gps_wait_for_time_cont0	 							; check if R6 (number of times we have looped) is equal to 6 (6 = number of received bytes for HH MM SS)
+		cjne R6, #06h, gps_wait_for_time_cont0	 							; check if R6 (number of times we have looped) is equal to 6 (6 =
+																			; number of received bytes for HH MM SS)
 			mov GPS_WAIT_TIME, #05h											; wait out ".000," (5 bytes)
 			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_A 			; load next state for after un-needed byte(s) are received
-			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #09h 		 				; load next state for after un-needed byte(s) are received
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; update GPS_OBTAIN_DATA_SUB_STATE
-			; mov GPS_OBTAIN_DATA_SUB_STATE, #01h 							; update GPS_OBTAIN_DATA_SUB_STATE
 		gps_wait_for_time_cont0:
 			ljmp serial_service_end											; jump to end
 	serial_service_cont7:
@@ -1205,9 +1376,7 @@ SERIAL_SERVICE:
 																			; we are NOT saving latitude and longitude data from GPS
 			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_LATITUDE	; load next state for after un-needed byte(s) are received
 			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_DATE			; load next state for after un-needed byte(s) are received
-			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #0Ah						; load next state for after un-needed byte(s) are received
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
-			; mov GPS_OBTAIN_DATA_SUB_STATE, #01h 							; update GPS_OBTAIN_DATA_SUB_STATE
 			ljmp serial_service_end											; jump to end
 		gps_wait_for_a_cont0:
 			ljmp serial_reset_GPS_OBTAIN_DATA_SUB_STATE 					; reset GPS_OBTAIN_DATA_SUB_STATE
@@ -1231,14 +1400,15 @@ SERIAL_SERVICE:
 	; 		ljmp serial_service_end											; if we receive a ",", we don't want to store it - jump to end
 	; 	load_lat_data:														; keep loading data
 	; 	anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
-	; 	mov R0, GPS_POINTER
-	;	mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
+	; 	mov R1, GPS_POINTER
+	;	mov @R1, a 															; move the data in a into location GPS_POINTER is pointing
 	; 	inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
-	; 	cjne R6, #0Bh, serial_service_end 									; check if R6 (number of times we have looped) is equal to 11 (11 = number of received bytes for llll.llll,a)
+	; 	cjne R6, #0Bh, serial_service_end 									; check if R6 (number of times we have looped) is equal to 11 (11 =
+	;																		; number of received bytes for llll.llll,a)
 	; 		; on the last latitude byte, we actually don't want to apply the 00001111 mask (the last byte is a letter), so re-write the final byte
 	; 		dec GPS_POINTER													; decrement pointer
-	; 		mov R0, GPS_POINTER
-	;		mov @R0, SBUF													; re-write ascii data (letter) into @R0
+	; 		mov R1, GPS_POINTER
+	;		mov @R1, SBUF													; re-write ascii data (letter) into @R1
 	; 		inc GPS_POINTER													; update pointer
 	; 		mov GPS_WAIT_TIME, #01h											; wait out "," (1 byte)
 	; 		mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_LONGITUDE		; load next state for after un-needed byte(s) are received
@@ -1265,14 +1435,15 @@ SERIAL_SERVICE:
 	; 		ljmp serial_service_end											; if we receive a ",", we don't want to store it - jump to end
 	; 	load_long_data:														; keep loading data
 	; 	anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
-	; 	mov R0, GPS_POINTER
-	;	mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
+	; 	mov R1, GPS_POINTER
+	;	mov @R1, a 															; move the data in a into location GPS_POINTER is pointing
 	; 	inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
-	; 	cjne R6, #0Ch, serial_service_end 									; check if R6 (number of times we have looped) is equal to 12 (12 = number of received bytes for yyyyy.yyyy,a)
+	; 	cjne R6, #0Ch, serial_service_end 									; check if R6 (number of times we have looped) is equal to 12 (12 =
+	;																		; number of received bytes for yyyyy.yyyy,a)
 	; 		; on the last longitude byte, we actually don't want to apply the 00001111 mask (the last byte is a letter), so re-write the final byte
 	; 		dec GPS_POINTER													; decrement pointer
-	; 		mov R0, GPS_POINTER
-	;		mov @R0, SBUF													; re-write ascii data (letter) into @R0
+	; 		mov R1, GPS_POINTER
+	;		mov @R1, SBUF													; re-write ascii data (letter) into @R1
 	; 		inc GPS_POINTER													; update pointer											
 	; 		mov GPS_WAIT_TIME, #0Dh											; wait out ",v.vv,ttt.tt," (13 bytes)
 	; 		mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_DATE			; load next state for after un-needed byte(s) are received
@@ -1291,24 +1462,22 @@ SERIAL_SERVICE:
 		xrl CALCULATED_GPS_CHECKSUM, a				 						; update the CALCULATED_GPS_CHECKSUM
 		inc R6 																; increment R6
 		anl a, #0Fh 														; bitwise AND received ascii with 00001111 (result is stored in a)
-		mov R0, GPS_POINTER
-		mov @R0, a 															; move the data in a into location GPS_POINTER is pointing
+		mov R1, GPS_POINTER
+		mov @R1, a 															; move the data in a into location GPS_POINTER is pointing
 		inc GPS_POINTER														; update GPS_POINTER pointer to next memory location
-		cjne R6, #06h, serial_service_end 									; check if R6 (number of times we have looped) is equal to 6 (6 = number of received bytes for ddmmyy)
+		cjne R6, #06h, serial_service_end 									; check if R6 (number of times we have looped) is equal to 6 (6 =
+																			; number of received bytes for ddmmyy)
 			mov GPS_WAIT_TIME, #04h											; wait out ",,,A" (4 bytes)
 			mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_STAR			; load next state for after un-needed byte(s) are received
-			; mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #0Dh 						; load next state for after un-needed byte(s) are received
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT						; update GPS_OBTAIN_DATA_SUB_STATE
-			; mov GPS_OBTAIN_DATA_SUB_STATE, #01h 							; update GPS_OBTAIN_DATA_SUB_STATE
 			ljmp serial_service_end											; jump to end
 	serial_service_cont11:
 
 	; "*"
 	; GPS_WAIT_FOR_STAR:
 	cjne R3, #GPS_WAIT_FOR_STAR, serial_service_cont12
-		cjne a, #2Ah, serial_service_end	;3/14/2020 SHOULD THIS GO TO serial_reset_GPS_OBTAIN_DATA_SUB_STATE?????!!!!!!!!!!							; check if received serial data is "*"
+		cjne a, #2Ah, serial_reset_GPS_OBTAIN_DATA_SUB_STATE				; check if received serial data is "*"
 			mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_CHECKSUM			; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
-			; mov GPS_OBTAIN_DATA_SUB_STATE, #0Eh 							; if received correct character, update GPS_OBTAIN_DATA_SUB_STATE
 			ljmp serial_service_end											; jump to end
 	serial_service_cont12:
 
@@ -1318,26 +1487,35 @@ SERIAL_SERVICE:
 		inc R6 																; increment R6
 		lcall ASCII_TO_HEX 													; convert ascii to hex
 		cjne R6, #01h, append_low_nibble									; check if we received our first checksum byte
-			swap a 															; if this is our first checksum byte, we want to swap accumulator nibbles (i.e. #01h -> #10h)
+			swap a 															; if this is our first checksum byte, we want to swap accumulator
+																			; nibbles (i.e. #01h -> #10h)
 			mov RECEIVED_GPS_CHECKSUM, a 									; move partial result into RECEIVED_GPS_CHECKSUM
 			ljmp serial_service_end											; jump to end
 		append_low_nibble:
-			orl a, RECEIVED_GPS_CHECKSUM									; append the low nibble by bitwise OR (NOTE: the lower nibble of RECEIVED_GPS_CHECKSUM should be 0)!
+			orl a, RECEIVED_GPS_CHECKSUM									; append the low nibble by bitwise OR (NOTE: the lower nibble of
+																			; RECEIVED_GPS_CHECKSUM should be 0)!
 			mov RECEIVED_GPS_CHECKSUM, a 									; move the final result into RECEIVED_GPS_CHECKSUM
-			cjne a, CALCULATED_GPS_CHECKSUM, serial_reset_GPS_OBTAIN_DATA_SUB_STATE		; compare RECEIVED_GPS_CHECKSUM (which should still be in a) with the CALCULATED_GPS_CHECKSUM
+			cjne a, CALCULATED_GPS_CHECKSUM, serial_reset_GPS_OBTAIN_DATA_SUB_STATE		; compare RECEIVED_GPS_CHECKSUM (which should still be
+																						; in a) with the CALCULATED_GPS_CHECKSUM
 				; HAVE RECEIVED COMPLETE GPS NMEA $GPRMC SENTENCE
 				setb P1.7 													; turn on GPS SYNC light
-				lcall LOAD_GPS_DATA 										; load values into SECONDS, MINUTES, HOURS, DAY, MONTH, and YEAR registers 
-				; lcall ENTER_GPS_SET_TIMEZONE_STATE 							; update GPS_SYNC_SUB_STATE
-				lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
-				sjmp serial_service_end 									; jump to end
+				lcall LOAD_GPS_DATA 										; load values into SECONDS, MINUTES, HOURS, DAY, MONTH, and YEAR
+				; check TIMEZONE_SET? bit
+				jb TIMEZONE_SET?, serial_service_cont14 					
+					; if TIMEZONE_SET? bit is not set, let user input timezone
+					lcall ENTER_GPS_SET_TIMEZONE_STATE 						; update GPS_SYNC_SUB_STATE
+					sjmp serial_service_end
+				serial_service_cont14:
+					; if TIMEZONE_SET? bit is set, user has already set timezone, so go directly to SHOW_TIME_STATE
+					lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+					sjmp serial_service_end 								; jump to end
+
 	serial_service_cont13:
 
 	; Reset
 	serial_reset_GPS_OBTAIN_DATA_SUB_STATE:
 		mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_DOLLAR					; Reset GPS_OBTAIN_DATA_SUB_STATE
-		; mov GPS_OBTAIN_DATA_SUB_STATE, #02h								; Reset GPS_OBTAIN_DATA_SUB_STATE
-		mov GPS_POINTER, #08h 												; load GPS_POINTER (pointer) with memory address of RECEIVED_GPS_HRS_TENS
+		mov GPS_POINTER, #08h 												; load GPS_POINTER with memory address of RECEIVED_GPS_HRS_TENS
 
 	; End
 	serial_service_end:
@@ -1345,7 +1523,8 @@ SERIAL_SERVICE:
 	; pop registers/accumulator
 	; do NOT push or pop R6
 	pop 3
-	pop 0
+	pop 1
+	; pop 0
 	pop acc 
 ret
 
@@ -1431,6 +1610,8 @@ SET_TIME_STATE_TO_SHOW_TIME_STATE:
 	clr TRANSITION_STATE?
 
 	mov SECONDS, #00h 							; set seconds back to 0
+
+	clr P1.7 									; turn off GPS SYNC light
 
 	; Update DECA_STATE
 	lcall ENTER_DECA_COUNTING_SECONDS_STATE
@@ -1583,6 +1764,10 @@ GPS_SYNC_STATE_TO_SHOW_TIME_STATE:
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	mov SCON, #00h 			; initialize the serial port in mode 0
 
+	; Display "-" in grids 3 & 6
+	mov GRID6, #0Ah 	; write dash to grid 6 for date
+	mov GRID3, #0Ah 	; write dash to grid 3 for date
+
 	; Turn on the VFD
 	clr VFD_PAUSED?
 
@@ -1590,16 +1775,21 @@ GPS_SYNC_STATE_TO_SHOW_TIME_STATE:
 	mov IP, #22h
 
 	; update DECA_STATE
-	lcall ENTER_DECA_COUNTING_SECONDS_STATE
+	; lcall ENTER_DECA_COUNTING_SECONDS_STATE
+	lcall ENTER_DECA_FILL_UP_STATE
 
 	; update CLOCK_STATE
 	mov CLOCK_STATE, #SHOW_TIME_STATE
 ret
 
 ENTER_GPS_SYNC_STATE:
-	; set timeout (120 seconds)
-	mov TIMEOUT_LENGTH, #78h
+	; set timeout (255 seconds)
+	mov TIMEOUT_LENGTH, #0FFh
+	; mov TIMEOUT_LENGTH, #0Ah
 	mov TIMEOUT, TIMEOUT_LENGTH
+
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
 	
 	; have VFD display all dashes
 	setb VFD_PAUSED? 			; pause the VFD
@@ -1811,6 +2001,9 @@ ENTER_GPS_OBTAIN_DATA_STATE:
 	mov TIMEOUT_LENGTH, #78h
 	mov TIMEOUT, TIMEOUT_LENGTH
 
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
 	; make serial port interrupt highest priority
 	mov IP, #10h
 
@@ -1850,13 +2043,13 @@ ENTER_GPS_OBTAIN_DATA_STATE:
 
 	; update GPS_SYNC_SUB_STATE
 	mov GPS_SYNC_SUB_STATE, #GPS_OBTAIN_DATA_STATE
-
 ret
 
 ENTER_GPS_SET_TIMEZONE_STATE:
-	; set timeout (60 seconds)
-	mov TIMEOUT_LENGTH, #3Ch
-	mov TIMEOUT, TIMEOUT_LENGTH
+	; no timeout in this state so the user must input a timezone
+
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
 
 	; disable the GPS 	
 	clr P1.2
@@ -1869,8 +2062,31 @@ ENTER_GPS_SET_TIMEZONE_STATE:
 	clr TR1 				; stop timer 1
 	clr ET1					; disable timer 1 overflow Interrupt
 
+	; Added the two lines below to see if this was the cause of flickering, but still saw flickering.
+	; Disable the serial interrupt
+	clr ES
+
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	mov SCON, #00h 			; initialize the serial port in mode 0
+
+	; Move in mask values
+	mov VFD_FLASH_MASK, #1Fh 				; flash grids 1, 2, and 3
+	mov NIX_FLASH_MASK, #0FFh
+
+	; Display "Utc" on the VFD
+	mov GRID9, #0FFh 						; blank grid 9
+	mov GRID8, #12h 						; display 'U' on grid 8
+	mov GRID7, #13h 						; display 't' on grid 7
+	mov GRID6, #14h 						; display 'c' on grid 6
+	mov GRID5, #0FFh 						; blank grid 5
+	mov GRID4, #0FFh 						; blank grid 4
+	; grids 1, 2, and 3 are set in GPS_SET_TIMEZONE function
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #19h 					; TIMEZONE can be 25 (dec) max
+	mov LOWER_BOUND, #00h 					; TIMEZONE can be 0 min
+
+	mov R0, #70h							; corresponds to memory address of TIMEZONE
 
 	; Turn on the VFD
 	clr VFD_PAUSED?
@@ -1898,7 +2114,10 @@ ret
 
 ; =========== Display Functions ==========
 UPDATE_DISPLAYS:
-	lcall UPDATE_DECA					; update the decatron
+	; push PSW -- Note:  this seems to have fixed some glitchy flashing in the VFD during the GPS_SET_TIMEZONE state
+	push PSW
+
+	lcall UPDATE_DECA						; update the decatron
 	jb VFD_PAUSED?, update_displays_cont1 	; if VFD_PAUSED? = 1, do not update VFD
 		lcall UPDATE_VFD					; update the VFD
 	update_displays_cont1:
@@ -1909,6 +2128,8 @@ UPDATE_DISPLAYS:
 		lcall CHECK_TO_FLASH_DISPLAYS 	; flash displays for set modes
 		mov R5, #0Ch					; reset R5 with a value of 12
 	update_displays_cont0:
+
+	pop PSW
 ret
 
 CHECK_TO_FLASH_DISPLAYS:
@@ -2032,12 +2253,16 @@ UPDATE_VFD:
 	; | a | b | c | d | e | f | g | dp |
 	; A VFD_NUM (@R1) value of #0Ah corresponds to a "-" for grids 1-9
 	; A VFD_NUM (@R1) value of #0Bh corresponds to a "*" for grid 9
-	; A VFD_NUM (@R1) value of #0Ch corresponds to a "A" for grids 1-9
-	; A VFD_NUM (@R1) value of #0Dh corresponds to a "L" for grids 1-9
-	; A VFD_NUM (@R1) value of #0Eh corresponds to a "a" for grids 1-9
-	; A VFD_NUM (@R1) value of #0Fh corresponds to a "r" for grids 1-9
+	; A VFD_NUM (@R1) value of #FFh corresponds to a BLANK for grids 1-9
+	; A VFD_NUM (@R1) value of #0Ch corresponds to a "A" for grids 1-8
+	; A VFD_NUM (@R1) value of #0Dh corresponds to a "L" for grids 1-8
+	; A VFD_NUM (@R1) value of #0Eh corresponds to a "a" for grids 1-8
+	; A VFD_NUM (@R1) value of #0Fh corresponds to a "r" for grids 1-8
 	; A VFD_NUM (@R1) value of #10h bugs out (flickers "-" in grid 9)
-	; A VFD_NUM (@R1) value of #11h corresponds to a "n" for grids 1-9
+	; A VFD_NUM (@R1) value of #11h corresponds to a "n" for grids 1-8
+	; A VFD_NUM (@R1) value of #12h corresponds to a "U" for grids 1-8
+	; A VFD_NUM (@R1) value of #13h corresponds to a "t" for grids 1-8
+	; A VFD_NUM (@R1) value of #14h corresponds to a "c" for grids 1-8
 
 	push 1							; push R1 onto the stack to preserve its value
 	push acc						; push a onto the stack to preserve its value
@@ -2187,6 +2412,27 @@ UPDATE_VFD:
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
 	vfd_cont17:
 
+	; "U" numeral
+	cjne @R1, #12h, vfd_cont18
+		mov SBUF, #7Ch				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont18:
+
+	; "t" numeral
+	cjne @R1, #13h, vfd_cont19
+		mov SBUF, #1Eh				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont19:
+
+	; "c" numeral
+	cjne @R1, #14h, vfd_cont20
+		mov SBUF, #1Ah				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont20:
+
 	
 	setb P3.5						; load the MAX6921
 	clr P3.5						; latch the MAX6921
@@ -2199,9 +2445,9 @@ UPDATE_VFD:
 	rlc a 								; rotate the acculator left through carry (NOTE! the carry flag gest rotated into bit 0)
 	mov GRID_EN_2, a 					; move the rotated result back into GRID_EN_2
 	clr c 								; clear the carry flag
-	cjne R1, #3Ch, vfd_cont18 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
+	cjne R1, #3Ch, vfd_cont21 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
 		lcall VFD_RESET					; reset the VFD cycle
-	vfd_cont18:
+	vfd_cont21:
 
 	pop PSW
 	pop acc					; restore value of a to value before UPDATE_VFD was called
@@ -2903,6 +3149,7 @@ ASCII_TO_HEX:
 	; #45h	....... #0Eh
 	; #46h	....... #0Fh
 	push 0
+	push PSW
 
 	mov R0, a 					; save orignial a value in R0
 	clr c 						; clear the carry flag
@@ -2917,6 +3164,7 @@ ASCII_TO_HEX:
 
 	ascii_to_hex_end:
 
+	pop PSW
 	pop 0
 ret
 
@@ -2970,9 +3218,227 @@ LOAD_GPS_DATA:
 	add a, RECEIVED_GPS_YEAR_ONES		; add the xxx_ONES to the product
 	mov YEAR, a 						; load YEAR with GPS data
 
+	; apply timezone offset
+	lcall APPLY_TIMEZONE_TO_UTC
 
 	pop PSW
 	pop b
+ret
+
+APPLY_TIMEZONE_TO_UTC:
+	; This function applies the timezone offset stored in TIMEZONE to the HOURS, MONTH, DAY, and YEAR registers.
+	; NOTE:  Be careful when calling this function -- what is in HOURS, MONTH, DAY, YEAR should be UTC before calling this.
+	push acc
+	push PSW
+
+	mov a, TIMEZONE
+	add a, HOURS 							; add HOURS to TIMEZONE
+	clr c
+	subb a, #0Bh 							; remove the offset of TIMEZONE
+
+	jnc apply_timezone_to_utc_cont0 		; determine if the hours rolled under
+		; the hours rolled under (HOURS < 0), so wrap it around to 23 again
+		add a, #18h 						; add 24 (dec) to the accumulator to get the result within 0 and 23
+		lcall DECREMENT_DAY 				; decrement the day (helper function takes care of DAY, MONTH, and YEAR)
+		sjmp apply_timezone_to_utc_cont2
+
+	apply_timezone_to_utc_cont0:
+	; the hours did not roll under (HOURS are not < 0), so check if the hours rolled over (if HOURS > 23)
+	clr c
+	subb a, #18h 							; subtract 24 (dec) from the accumulator to determine if a is between 0 and 23 or above 23
+	jnc apply_timezone_to_utc_cont1
+		; the hours did not roll over or under (0 <= HOURS <= 23)
+		add a, #18h 						; add 24 (dec) to the accumulator to get the result within 0 and 23
+		sjmp apply_timezone_to_utc_cont2
+
+	apply_timezone_to_utc_cont1:
+	; the hours rolled over (HOURS > 23), and already subtracted 24 (dec) from it
+	lcall INCREMENT_DAY 					; increment the day (helper function takes care of DAY, MONTH, and YEAR)
+
+	apply_timezone_to_utc_cont2:
+	; the hours with the UTC offset applied are in the accumulator and ready to display
+	mov HOURS, a 							; move the calculated value into HOURS
+
+	pop PSW
+	pop acc
+ret
+
+INCREMENT_DAY:
+	; This function is used to increment DAY, including making changes to MONTH and YEAR if necessary.
+
+	; push used registers
+	push acc
+	push b
+	push PSW
+
+	inc DAY 		; increment the DAY
+	
+	; == Check if we need to increment the MONTH ===============
+	mov a, DAY
+
+	; if DAY is 29, check if MONTH is February
+	cjne a, #1Dh, increment_day_cont0
+		mov a, MONTH
+		cjne a, #02h, increment_day_done 			; check if MONTH is February
+			; check if it is a leap year, in which case the MONTH does not need to change
+			mov a, YEAR
+			mov b, #04h
+			div ab 									; check if the year is a multiple of 4 (leap year)
+			mov a, b 								; put the remainder into the accumulator
+			jz increment_day_done 					; if it is a leap year, the accumulator is zero, so jump to end of routine
+				; it is not a leap year, so increment the month
+				inc MONTH
+				mov DAY, #01h 						; roll over the DAY
+				sjmp increment_day_done 			; we know the MONTH is March, so no need to check to increment the year
+
+	increment_day_cont0:
+	; if DAY is 30, check if MONTH is February
+	cjne a, #1Eh, increment_day_cont1
+		mov a, MONTH
+		cjne a, #02h, increment_day_done 			; check if MONTH is February
+			inc MONTH 								; increment the month
+			mov DAY, #01h 							; roll over the day
+			sjmp increment_day_done 				; we know the MONTH is March, so no need to check to increment the year
+
+	increment_day_cont1:
+	; if DAY is 31, check if MONTH is April, June, September, or November
+	cjne a, #1Fh, increment_day_cont2
+		mov a, MONTH
+		cjne a, #04h, increment_day_cont3 			; check if MONTH is April
+			inc MONTH
+			mov DAY, #01h
+			sjmp increment_day_done
+		increment_day_cont3:
+		cjne a, #06h, increment_day_cont4 			; check if MONTH is June
+			inc MONTH
+			mov DAY, #01h
+			sjmp increment_day_done
+		increment_day_cont4:
+		cjne a, #09h, increment_day_cont5 			; check if MONTH is September
+			inc MONTH
+			mov DAY, #01h
+			sjmp increment_day_done
+		increment_day_cont5:
+		cjne a, #0Bh, increment_day_done 			; check if MONTH is November
+			inc MONTH
+			mov DAY, #01h
+			sjmp increment_day_done
+
+	increment_day_cont2:
+	; if DAY is 32, we will have to roll over MONTH regardless
+	cjne a, #20h, increment_day_done
+		inc MONTH
+		mov DAY, #01h
+
+	; == Check if we need to increment the YEAR ================
+	mov a, MONTH 
+	; if MONTH is 13, increment the YEAR
+	cjne a, #0Dh, increment_day_done
+		inc YEAR
+		mov MONTH, #01h
+
+	; == Check if we need to increment the century =============
+	mov a, YEAR
+	; if YEAR is 100, change YEAR -> 0
+	cjne a, #64h, increment_day_done
+		mov YEAR, #00h
+
+	increment_day_done:
+
+	; pop registers
+	pop PSW
+	pop b
+	pop acc
+ret
+
+DECREMENT_DAY:
+	; This function is used to decrement DAY, including making changes to MONTH and YEAR if necessary.
+
+	; push used registers
+	push acc
+	push b
+	push PSW
+
+	; decrement the DAY
+	djnz DAY, decrement_day_done
+	
+		; If we are still here, the day has gone to 0, so decrementing the month is needed
+		djnz MONTH, decrement_day_cont0
+			; the month has also gone to zero, so decrementing the year is needed
+			mov a, YEAR
+			jz decrement_day_cont1
+				; if YEAR is not 0:
+				dec YEAR 					; decrement the year
+				mov MONTH, #0Ch 			; move 12 (dec) into MONTH for December
+				mov DAY, #1Fh 				; move 31 (dec) into DAY since December has 31 days
+				sjmp decrement_day_done
+			decrement_day_cont1:
+				; the year is currently 0 and has to be decremented, so move in 99
+				mov YEAR, #63h 				; move 99 (dec) into YEAR
+				mov MONTH, #0Ch 			; move 12 (dec) into MONTH for December
+				mov DAY, #1Fh 				; move 31 (dec) into DAY since December has 31 days
+				sjmp decrement_day_done
+
+		decrement_day_cont0:
+			; the month was decremented and is a valid month -- check which month to know what to put into DAY
+			mov a, MONTH
+
+			; check if MONTH is February
+			cjne a, #02h, decrement_day_cont2
+				; MONTH is February, so check if it is a leap year
+				mov a, YEAR
+				mov b, #04h
+				div ab 									; check if the year is a multiple of 4 (leap year)
+				mov a, b 								; put the remainder into the accumulator
+				jz decrement_day_cont3 					; if it is a leap year, the accumulator is zero
+					; it is not a leap year:
+					mov DAY, #1Ch 						; move 28 (dec) into DAY since February has 28 days on a non leap year
+					sjmp decrement_day_done
+
+				decrement_day_cont3:
+					; it is a leap year:
+					mov DAY, #1Dh 						; move 29 (dec) into DAY since February has 29 days on a leap year
+					sjmp decrement_day_done
+
+			decrement_day_cont2:
+
+			; check if MONTH is April
+			cjne a, #04h, decrement_day_cont4
+				; the MONTH is one with 30 days:
+				mov DAY, #1Eh
+				sjmp decrement_day_done
+			decrement_day_cont4:
+			
+			; check if MONTH is June
+			cjne a, #06h, decrement_day_cont5
+				; the MONTH is one with 30 days:
+				mov DAY, #1Eh
+				sjmp decrement_day_done
+			decrement_day_cont5:
+			
+			; check if MONTH is September
+			cjne a, #09h, decrement_day_cont6
+				; the MONTH is one with 30 days:
+				mov DAY, #1Eh
+				sjmp decrement_day_done
+			decrement_day_cont6:
+			
+			; check if MONTH is November
+			cjne a, #0Bh, decrement_day_cont7
+				; the MONTH is one with 30 days:
+				mov DAY, #1Eh
+				sjmp decrement_day_done
+			decrement_day_cont7:
+			
+			; the MONTH is one with 31 days:
+			mov DAY, #1Fh
+
+	decrement_day_done:
+
+	; pop registers
+	pop PSW
+	pop b
+	pop acc
 ret
 
 SHORT_DELAY:

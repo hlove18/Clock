@@ -61,10 +61,10 @@ INIT:
 	.equ NIX_INDX, 25h
 
 	; Intialize
-	mov NIX4, #04h
-	mov NIX3, #03h
-	mov NIX2, #02h
-	mov NIX1, #01h
+	mov NIX4, #07h
+	mov NIX3, #07h
+	mov NIX2, #09h
+	mov NIX1, #09h
 
 	; Initalize the VFD
 	lcall NIX_RESET
