@@ -486,26 +486,27 @@ MAIN:
 
 	cjne a, #SHOW_TIME_STATE, main_cont0
 		lcall SHOW_TIME
-		sjmp main_cont3
+		sjmp main_cont5
 	main_cont0:
 
 	cjne a, #SET_TIME_STATE, main_cont1
 		lcall SET_TIME
-		sjmp main_cont3
+		sjmp main_cont5
 	main_cont1:
 
 	cjne a, #SHOW_ALARM_STATE, main_cont2
 		lcall SHOW_ALARM
-		sjmp main_cont3
+		sjmp main_cont5
 	main_cont2:
 
 	cjne a, #SET_ALARM_STATE, main_cont3
 		lcall SET_ALARM
+		sjmp main_cont5
 	main_cont3:
-
 
 	; cjne a, #SETTINGS_STATE, main_cont4
 	; 	lcall SETTINGS
+	;	sjmp main_cont5
 	; main_cont4:
 
 	cjne a, #GPS_SYNC_STATE, main_cont5
@@ -591,16 +592,25 @@ SHOW_TIME:
 	; Check if there is a GPS
 	jnb GPS_PRESENT?, show_time_cont2
 		; GPS is present:
-		; TODO: Check if GPS sync is enabled
-		; Check if time to sync to the GPS
-		mov a, GPS_SYNC_TIME_HOURS										; check if time to sync
-		cjne a, HOURS, show_time_cont2 									; compare sync hours to current hours
-			mov a, GPS_SYNC_TIME_MINUTES
-			cjne a, MINUTES, show_time_cont2 							; compare sync minutes to current minutes
-				mov a, #02h
-				cjne a, SECONDS, show_time_cont2 						; compare current seconds to 2
-					lcall ENTER_GPS_SYNC_STATE 						 	; transition to GPS_SYNC_STATE
-					sjmp show_time_cont1
+		; Check if the alarm is currently not snoozing or firing
+		mov a, ALARM_STATE
+		cjne a, #ALARM_FIRING_STATE, show_time_cont3
+			sjmp show_time_cont2
+		show_time_cont3:
+		cjne a, #ALARM_SNOOZING_STATE, show_time_cont4
+			sjmp show_time_cont2
+			show_time_cont4:
+			; Alarm is not firing or snoozing
+			; TODO: Check if GPS sync is enabled
+			; Check if time to sync to the GPS
+			mov a, GPS_SYNC_TIME_HOURS										; check if time to sync
+			cjne a, HOURS, show_time_cont2 									; compare sync hours to current hours
+				mov a, GPS_SYNC_TIME_MINUTES
+				cjne a, MINUTES, show_time_cont2 							; compare sync minutes to current minutes
+					mov a, #02h
+					cjne a, SECONDS, show_time_cont2 						; compare current seconds to 2
+						lcall ENTER_GPS_SYNC_STATE 						 	; transition to GPS_SYNC_STATE
+						sjmp show_time_cont1
 	show_time_cont2:
 
 	; listen for rotary encoder press
@@ -747,6 +757,14 @@ GPS_SYNC: 	; has a sub-state machine with state variable GPS_SYNC_SUB_STATE
 	cjne a, #GPS_SET_TIMEZONE_STATE, gps_sync_cont2
 		lcall GPS_SET_TIMEZONE
 	gps_sync_cont2:
+
+	; ; check if the alarm is firing
+	; mov a, ALARM_STATE
+
+	; cjne a, #ALARM_FIRING_STATE, gps_sync_cont3
+	; 	; the alarm is firing:
+	; 	lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE 	; exit the syncing state since the alarm has priority
+	; gps_sync_cont3:
 ret
 
 ; ===== Set Time Sub-State Functions =======
@@ -1053,6 +1071,16 @@ ALARM_ENABLED:
 				mov a, #00h
 				cjne a, SECONDS, alarm_enabled_cont1 					; compare current seconds to 0
 					; TODO:  check if we are in a set time or set alarm state, in which case don't fire the alarm (jump to alarm_enabled_cont1 )
+
+					; check if CLOCK_STATE is GPS_SYNC_STATE
+					mov a, CLOCK_STATE
+					cjne a, #GPS_SYNC_STATE, alarm_enabled_cont2
+						; clock is currently syncing
+						lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE 		; abort the sync since the alarm has priority
+						clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+																		; fill-up state, which we want to override with the below line's alarm
+																		; transition, which puts the decatron in fast mode
+					alarm_enabled_cont2:
 					lcall ALARM_ENABLED_STATE_TO_ALARM_FIRING_STATE 	; transition to alarm firing state
 					sjmp alarm_enabled_cont1
 
@@ -1630,8 +1658,6 @@ SET_TIME_STATE_TO_SHOW_TIME_STATE:
 
 	mov SECONDS, #00h 							; set seconds back to 0
 
-	clr P1.7 									; turn off GPS SYNC light
-
 	; Update DECA_STATE
 	lcall ENTER_DECA_COUNTING_SECONDS_STATE
 
@@ -1669,6 +1695,8 @@ SHOW_TIME_STATE_TO_SET_TIME_STATE:
 	mov TIMEOUT, TIMEOUT_LENGTH
 
 	clr ROT_FLAG					; clear the ROT_FLAG
+
+	clr P1.7 						; turn off GPS sync indicator
 
 	; initalize external interrupts for rotary encoder
 	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
@@ -2069,7 +2097,7 @@ ENTER_GPS_SET_TIMEZONE_STATE:
 	; Clear the TRANSITION_STATE? bit
 	clr TRANSITION_STATE?
 
-	; disable the GPS 	
+	; disable the GPS
 	clr P1.2
 
 	; == This is how to configure timers going into GPS_SET_TIMEZONE_STATE:
@@ -2077,15 +2105,15 @@ ENTER_GPS_SET_TIMEZONE_STATE:
 	; [x] Timer 1 not used
 	; [x] Timer 2 does update displays
 	; Disable timer 1
-	clr TR1 				; stop timer 1
-	clr ET1					; disable timer 1 overflow Interrupt
+	clr TR1 								; stop timer 1
+	clr ET1									; disable timer 1 overflow Interrupt
 
 	; Added the two lines below to see if this was the cause of flickering, but still saw flickering.
 	; Disable the serial interrupt
 	clr ES
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
-	mov SCON, #00h 			; initialize the serial port in mode 0
+	mov SCON, #00h 							; initialize the serial port in mode 0
 
 	; Move in mask values
 	mov VFD_FLASH_MASK, #1Fh 				; flash grids 1, 2, and 3
@@ -2114,12 +2142,12 @@ ENTER_GPS_SET_TIMEZONE_STATE:
 
 	; enable external interrupts for rotary encoder
 	; initalize external interrupts for rotary encoder
-	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
-	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
-	setb EX0						; enable external interrupt 0
-	setb EX1						; enable external interrupt 1
+	clr IE1									; clear any "built up" hardware interrupt flags for external interrupt 1
+	clr IE0									; clear any "built up" hardware interrupt flags for external interrupt 0
+	setb EX0								; enable external interrupt 0
+	setb EX1								; enable external interrupt 1
 
-	clr ROT_FLAG					; clear the ROT_FLAG
+	clr ROT_FLAG							; clear the ROT_FLAG
 
 	; update DECA_STATE
 	lcall ENTER_DECA_FLASHING_STATE
