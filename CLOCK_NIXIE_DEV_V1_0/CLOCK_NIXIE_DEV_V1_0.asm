@@ -141,6 +141,8 @@ INIT:
 	mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_DOLLAR
 	mov GPS_OBTAIN_DATA_NEXT_SUB_STATE, #GPS_WAIT_FOR_G
 
+	.equ GPS_SYNC_TIME_HOURS, 6Dh
+	.equ GPS_SYNC_TIME_MINUTES, 6Eh
 	.equ GPS_FIX_HIGH_TIMEOUT, 6Fh
 	.equ TIMEZONE, 70h 							; TIMEZONE variable holds the offset from UTC minus 11 hours.
 												; Therefore, UTC is TIMEZONE = #0Bh.  US east coast is either UTC-4 or UTC-5 hours depending on
@@ -152,6 +154,8 @@ INIT:
 	mov GPS_POINTER, #08h  						; load GPS_POINTER with memory address of RECEIVED_GPS_HRS_TENS
 	mov TIMEZONE, #0Bh 							; default to UTC
 	mov GPS_FIX_HIGH_TIMEOUT, #020h 			; load 32 (dec) into GPS_FIX_HIGH_TIMEOUT
+	mov GPS_SYNC_TIME_HOURS, #00h 				; default GPS sync time to 12:01am
+	mov GPS_SYNC_TIME_MINUTES, #01h 			; default GPS sync time to 12:01am
 
 	; ====== Received GPS Variables ======
 	; !!!!!!! IMPORTANT: DO NOT MOVE THESE MEMORY LOCATIONS (pointers are used to update)
@@ -583,6 +587,21 @@ SHOW_TIME:
 	mov NIX1, MIN_ONES
 
 	; mov DECATRON, SECONDS --> This is taken care of in the decatron state machine
+
+	; Check if there is a GPS
+	jnb GPS_PRESENT?, show_time_cont2
+		; GPS is present:
+		; TODO: Check if GPS sync is enabled
+		; Check if time to sync to the GPS
+		mov a, GPS_SYNC_TIME_HOURS										; check if time to sync
+		cjne a, HOURS, show_time_cont2 									; compare sync hours to current hours
+			mov a, GPS_SYNC_TIME_MINUTES
+			cjne a, MINUTES, show_time_cont2 							; compare sync minutes to current minutes
+				mov a, #02h
+				cjne a, SECONDS, show_time_cont2 						; compare current seconds to 2
+					lcall ENTER_GPS_SYNC_STATE 						 	; transition to GPS_SYNC_STATE
+					sjmp show_time_cont1
+	show_time_cont2:
 
 	; listen for rotary encoder press
 	mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
@@ -1775,7 +1794,6 @@ GPS_SYNC_STATE_TO_SHOW_TIME_STATE:
 	mov IP, #22h
 
 	; update DECA_STATE
-	; lcall ENTER_DECA_COUNTING_SECONDS_STATE
 	lcall ENTER_DECA_FILL_UP_STATE
 
 	; update CLOCK_STATE
