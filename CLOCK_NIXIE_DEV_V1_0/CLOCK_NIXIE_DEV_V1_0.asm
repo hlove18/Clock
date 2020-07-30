@@ -73,6 +73,7 @@ INIT:
 	SHOW_ALARM_STATE equ 3
 	SET_ALARM_STATE equ 4
 	GPS_SYNC_STATE equ 5
+	SETTINGS_STATE equ 6
 	mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
 
 	mov TIMEOUT_LENGTH, #3Bh 			; (59 dec)
@@ -97,6 +98,18 @@ INIT:
 	SET_ALARM_HR_STATE equ 1
 	SET_ALARM_MIN_STATE equ 2
 	mov SET_ALARM_SUB_STATE, #SET_ALARM_HR_STATE
+
+	; Settings Sub-State Variable:
+	.equ SETTINGS_SUB_STATE, 6Ch
+
+	SETTINGS_SHOW_TIMEZONE_STATE equ 1
+	SETTINGS_SHOW_SNOOZE_STATE equ 2
+	SETTINGS_SET_TIMEZONE_STATE equ 11
+	SETTINGS_SET_SNOOZE_STATE equ 12
+	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
+
+	; Pull P3.7 HIGH (input used for settings button)
+	setb P3.7
 
 	; ========== GPS Variables =================
 	; disable the GPS
@@ -317,12 +330,13 @@ INIT:
 									; (e.g. decimal 1 for month)
 
 	; bits:
-	.equ A_FLAG, 			21h.0
-	.equ B_FLAG, 			21h.1
-	.equ BUTTON_FLAG, 		21h.2
-	.equ INC_LEAP_YEAR?,	21h.3
-	.equ ROT_FLAG, 			21h.4
-	.equ TRANSITION_STATE?,	22h.0
+	.equ A_FLAG, 			   21h.0
+	.equ B_FLAG, 			   21h.1
+	.equ BUTTON_FLAG, 		   21h.2
+	.equ INC_LEAP_YEAR?,	   21h.3
+	.equ ROT_FLAG, 			   21h.4
+	.equ TRANSITION_STATE?,	   22h.0
+	.equ SETTINGS_BUTTON_FLAG, 22h.1
 
 	; Fill in with values
 	clr A_FLAG
@@ -331,6 +345,7 @@ INIT:
 	clr INC_LEAP_YEAR?
 	clr ROT_FLAG
 	clr TRANSITION_STATE?
+	clr SETTINGS_BUTTON_FLAG
 
 	; Setup for rotary enocder pull-up resistors
 	setb P3.2 						; Set P3.2 high to use internal pull-up resistor
@@ -504,10 +519,10 @@ MAIN:
 		sjmp main_cont5
 	main_cont3:
 
-	; cjne a, #SETTINGS_STATE, main_cont4
-	; 	lcall SETTINGS
-	;	sjmp main_cont5
-	; main_cont4:
+	cjne a, #SETTINGS_STATE, main_cont4
+		lcall SETTINGS
+		sjmp main_cont5
+	main_cont4:
 
 	cjne a, #GPS_SYNC_STATE, main_cont5
 		lcall GPS_SYNC
@@ -613,7 +628,14 @@ SHOW_TIME:
 						sjmp show_time_cont1
 	show_time_cont2:
 
-	; listen for rotary encoder press
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, show_time_cont5 
+		lcall SHOW_TIME_STATE_TO_SETTINGS_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SETTINGS state
+		ljmp show_time_cont1
+	show_time_cont5:
+
+	; check for rotary encoder press
 	mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
 	lcall CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS
 
@@ -767,6 +789,43 @@ GPS_SYNC: 	; has a sub-state machine with state variable GPS_SYNC_SUB_STATE
 	; gps_sync_cont3:
 ret
 
+SETTINGS:    ; has a sub-state machine with state variable SETTINGS_SUB_STATE
+	mov a, SETTINGS_SUB_STATE
+
+	cjne a, #SETTINGS_SHOW_TIMEZONE_STATE, settings_cont0
+		lcall SETTINGS_SHOW_TIMEZONE
+		sjmp settings_cont3
+	settings_cont0:
+
+	cjne a, #SETTINGS_SHOW_SNOOZE_STATE, settings_cont1
+		lcall SETTINGS_SHOW_SNOOZE
+		sjmp settings_cont3
+	settings_cont1:
+
+	cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont2
+		lcall SETTINGS_SET_TIMEZONE
+		sjmp settings_cont3
+	settings_cont2:
+
+	cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont3
+		lcall SETTINGS_SET_SNOOZE
+	settings_cont3:
+
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_cont4
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+		ljmp settings_cont5
+	settings_cont4:
+
+	; Check for a timeout event
+	mov a, TIMEOUT
+	cjne a, #00h, settings_cont5
+		; do some exiting actions
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+	settings_cont5:
+ret
+
 ; ===== Set Time Sub-State Functions =======
 
 SET_MM:
@@ -885,6 +944,44 @@ SET_ALARM_MIN:
 		lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
 	set_alarm_min_cont3:
 ret
+
+; ===== Settings Sub-State Functions ======
+SETTINGS_SHOW_TIMEZONE:
+	; Have VFD display "Utc Zone"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #12h	    ; "U"
+	mov GRID7, #13h		; "t"
+	mov GRID6, #14h 	; "c"
+	mov GRID5, #0FFh 	; BLANK
+	mov GRID4, #16h 	; "Z"
+	mov GRID3, #17h 	; "o"		
+	mov GRID2, #11h 	; "n"
+	mov GRID1, #18h 	; "e"
+
+	; Have nixies display the current time
+ret
+
+SETTINGS_SHOW_SNOOZE:
+	; Have VFD display "SnooZe"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #0FFh	; BLANK
+	mov GRID7, #0FFh	; BLANK
+	mov GRID6, #15h 	; "S"
+	mov GRID5, #11h 	; "n"
+	mov GRID4, #17h 	; "o"
+	mov GRID3, #17h 	; "o"		
+	mov GRID2, #16h 	; "Z"
+	mov GRID1, #18h 	; "e"
+
+	; Have nixies display the snooze duration
+ret
+
+SETTINGS_SET_TIMEZONE:
+ret
+
+SETTINGS_SET_SNOOZE:
+ret
+
 
 ; ===== GPS Sync Sub-State Functions ======
 
@@ -1648,6 +1745,27 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 	cont15:
 ret
 
+CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS:
+	; This function is used to transisiton between SHOW_TIME and SETTINGS states
+	jnb P3.7, check_settings_short_press_cont0					; check if settings button is still pressed
+		clr SETTINGS_BUTTON_FLAG								; if not, clear the settings button flag
+	check_settings_short_press_cont0:
+
+	jb SETTINGS_BUTTON_FLAG, check_settings_short_press_cont1	; check to make sure SETTINGS_BUTTON_FLAG is cleared
+		jb P3.7, check_settings_short_press_cont1				; check if settings button is pressed
+			mov R2, #14h										; load R2 for 20 counts
+			mov R3, #0FFh										; load R3 for 255 counts
+			check_settings_short_press_loop0:					; settings button must be depressed for ~20ms before settings sub-state can be
+																; changed (also acts as debounce)
+				jb P3.7, check_settings_short_press_cont1		; check if settings button is still pressed
+				djnz R3, check_settings_short_press_loop0		; decrement count in R3
+			mov R3, #0FFh										; reload R3 in case loop is needed again
+			djnz R2, check_settings_short_press_loop0			; count R3 down again until R2 counts down
+			setb SETTINGS_BUTTON_FLAG							; set the SETTINGS_BUTTON_FLAG
+			setb TRANSITION_STATE?								; set the TRANSITION_STATE? bit
+	check_settings_short_press_cont1:
+ret
+
 ; Clock state machine transitions ========
 SET_TIME_STATE_TO_SHOW_TIME_STATE:
 	clr EX0						; disable external interrupt 0
@@ -1796,6 +1914,60 @@ SHOW_ALARM_STATE_TO_SHOW_TIME_STATE:
 	mov CLOCK_STATE, #SHOW_TIME_STATE
 ret
 
+SETTINGS_STATE_TO_SHOW_TIME_STATE:
+	; Display "-" in grids 3 & 6
+	mov GRID6, #0Ah 	; write dash to grid 6 for date
+	mov GRID3, #0Ah 	; write dash to grid 3 for date
+
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	clr EX0						; disable external interrupt 0
+	clr EX1						; disable external interrupt 1
+
+	; Update DECA_STATE
+	; lcall ENTER_DECA_COUNTING_SECONDS_STATE
+
+	; Update CLOCK_STATE
+	mov CLOCK_STATE, #SHOW_TIME_STATE
+	; lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
+	;          									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
+
+ret
+
+SHOW_TIME_STATE_TO_SETTINGS_STATE:
+	; set timeout (60 seconds)
+	mov TIMEOUT_LENGTH, #3Ch
+	mov TIMEOUT, TIMEOUT_LENGTH
+
+	; initalize external interrupts for rotary encoder
+	clr IE1							; clear any "built up" hardware interrupt flags for external interrupt 1
+	clr IE0							; clear any "built up" hardware interrupt flags for external interrupt 0
+	setb EX0						; enable external interrupt 0
+	setb EX1						; enable external interrupt 1
+
+	; Update SETTINGS_SUB_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
+
+	clr ROT_FLAG					; clear the ROT_FLAG
+
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #02h 					; SETTINGS_SUB_STATE can be 2 max
+	mov LOWER_BOUND, #01h 					; SETTINGS_SUB_STATE can be 1 min
+
+	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
+
+	; Update DECA_STATE
+	; lcall ENTER_DECA_SCROLLING_STATE
+
+
+	; Update CLOCK_STATE
+	mov CLOCK_STATE, #SETTINGS_STATE
+ret
+
 GPS_SYNC_STATE_TO_SHOW_TIME_STATE:
 	; disable the GPS 	
 	clr P1.2
@@ -1817,6 +1989,9 @@ GPS_SYNC_STATE_TO_SHOW_TIME_STATE:
 
 	; Turn on the VFD
 	clr VFD_PAUSED?
+
+	; Clear the TRANSITION_STATE? bit
+	clr TRANSITION_STATE?
 
 	; make timer 0 and timer 2 interrupts highest priority
 	mov IP, #22h
@@ -2309,6 +2484,10 @@ UPDATE_VFD:
 	; A VFD_NUM (@R1) value of #12h corresponds to a "U" for grids 1-8
 	; A VFD_NUM (@R1) value of #13h corresponds to a "t" for grids 1-8
 	; A VFD_NUM (@R1) value of #14h corresponds to a "c" for grids 1-8
+	; A VFD_NUM (@R1) value of #15h corresponds to a "S" for grids 1-8
+	; A VFD_NUM (@R1) value of #16h corresponds to a "Z" for grids 1-8
+	; A VFD_NUM (@R1) value of #17h corresponds to a "o" for grids 1-8
+	; A VFD_NUM (@R1) value of #18h corresponds to a "e" for grids 1-8
 
 	push 1							; push R1 onto the stack to preserve its value
 	push acc						; push a onto the stack to preserve its value
@@ -2479,6 +2658,34 @@ UPDATE_VFD:
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
 	vfd_cont20:
 
+	; "S" numeral
+	cjne @R1, #15h, vfd_cont21
+		mov SBUF, #0B6h				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont21:
+
+	; "Z" numeral
+	cjne @R1, #16h, vfd_cont22
+		mov SBUF, #0DAh				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont22:
+
+	; "o" numeral
+	cjne @R1, #17h, vfd_cont23
+		mov SBUF, #3Ah				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont23:
+
+	; "e" numeral
+	cjne @R1, #18h, vfd_cont24
+		mov SBUF, #0DEh				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont24:
+
 	
 	setb P3.5						; load the MAX6921
 	clr P3.5						; latch the MAX6921
@@ -2491,9 +2698,9 @@ UPDATE_VFD:
 	rlc a 								; rotate the acculator left through carry (NOTE! the carry flag gest rotated into bit 0)
 	mov GRID_EN_2, a 					; move the rotated result back into GRID_EN_2
 	clr c 								; clear the carry flag
-	cjne R1, #3Ch, vfd_cont21 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
+	cjne R1, #3Ch, vfd_cont25 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
 		lcall VFD_RESET					; reset the VFD cycle
-	vfd_cont21:
+	vfd_cont25:
 
 	pop PSW
 	pop acc					; restore value of a to value before UPDATE_VFD was called
