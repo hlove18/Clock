@@ -36,8 +36,8 @@ reti 							; exit
 ; Serial Port interrupt
 .org 0023h
 SERIAL_ISR:
-	lcall SERIAL_SERVICE 		; receive data
 	clr RI 						; clear receive interrupt flag
+	lcall SERIAL_SERVICE 		; receive data
 reti 							; exit
 
 ; Timer 2 interrupt
@@ -104,12 +104,29 @@ INIT:
 
 	SETTINGS_SHOW_TIMEZONE_STATE equ 1
 	SETTINGS_SHOW_SNOOZE_STATE equ 2
+	SETTINGS_SHOW_DATE_ON_OFF_STATE equ 3
 	SETTINGS_SET_TIMEZONE_STATE equ 11
 	SETTINGS_SET_SNOOZE_STATE equ 12
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
 
+	NUMBER_OF_SETTINGS equ 3 	; update this if adding more or taking out settings
+
 	; Pull P3.7 HIGH (input used for settings button)
 	setb P3.7
+
+	; ========== Settings Menu Values ===============
+	; Timezone setting
+	TIMEZONE_MAX equ 28 						; this corresponds to UTC+14
+	TIMEZONE_MIN equ 3 							; this corresponds to UTC-11
+
+	; Snooze duration
+	SNOOZE_DURATION_MAX equ 90
+	SNOOZE_DURATION_MIN equ 1
+
+	; VFD date display
+	.equ DATE_ON?, 23h.1 		; corresponds to VFD displaying the date when in SHOW_TIME
+	setb DATE_ON? 				; default to displaying the date
+	clr P1.0 					; enable the VFD display
 
 	; ========== GPS Variables =================
 	; disable the GPS
@@ -157,15 +174,16 @@ INIT:
 	.equ GPS_SYNC_TIME_HOURS, 6Dh
 	.equ GPS_SYNC_TIME_MINUTES, 6Eh
 	.equ GPS_FIX_HIGH_TIMEOUT, 6Fh
-	.equ TIMEZONE, 70h 							; TIMEZONE variable holds the offset from UTC minus 11 hours.
-												; Therefore, UTC is TIMEZONE = #0Bh.  US east coast is either UTC-4 or UTC-5 hours depending on
-												; time of year due to daylights savings, so TIMEZONE will normally be #07h (UTC-4) or #06h (UTC-5).
+	.equ TIMEZONE, 70h 							; TIMEZONE variable holds the offset from UTC minus 14 hours.
+												; Therefore, UTC is TIMEZONE = #0Eh.  US east coast is either UTC-4 or UTC-5 hours depending on
+												; daylights savings, so TIMEZONE will normally be #0Ah (UTC-4) or #09h (UTC-5).
+												; This offset is such that a UTC+14 offset can be unapplied easily by UNAPPLY_TIMEZONE_TO_GET_UTC.
 	.equ GPS_POINTER, 71h
 	.equ GPS_FIX_LPF, 72h
 	.equ CALCULATED_GPS_CHECKSUM, 73h
 	.equ GPS_WAIT_TIME, 74h
 	mov GPS_POINTER, #08h  						; load GPS_POINTER with memory address of RECEIVED_GPS_HRS_TENS
-	mov TIMEZONE, #0Bh 							; default to UTC
+	mov TIMEZONE, #0Eh 							; default to UTC
 	mov GPS_FIX_HIGH_TIMEOUT, #020h 			; load 32 (dec) into GPS_FIX_HIGH_TIMEOUT
 	mov GPS_SYNC_TIME_HOURS, #00h 				; default GPS sync time to 12:01am
 	mov GPS_SYNC_TIME_MINUTES, #01h 			; default GPS sync time to 12:01am
@@ -274,7 +292,7 @@ INIT:
 	mov GRID5, #03h
 	mov GRID4, #01h
 	mov GRID3, #0Ah
-	mov GRID2, #01h
+	mov GRID2, #02h
 	mov GRID1, #09h
 	; Initialize the VFD
 	lcall VFD_RESET
@@ -793,36 +811,51 @@ SETTINGS:    ; has a sub-state machine with state variable SETTINGS_SUB_STATE
 	mov a, SETTINGS_SUB_STATE
 
 	cjne a, #SETTINGS_SHOW_TIMEZONE_STATE, settings_cont0
-		lcall SETTINGS_SHOW_TIMEZONE
-		sjmp settings_cont3
+		lcall SETTINGS_SHOW_TIMEZONE	
+		sjmp settings_cont4
 	settings_cont0:
 
 	cjne a, #SETTINGS_SHOW_SNOOZE_STATE, settings_cont1
 		lcall SETTINGS_SHOW_SNOOZE
-		sjmp settings_cont3
+		sjmp settings_cont4
 	settings_cont1:
 
-	cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont2
-		lcall SETTINGS_SET_TIMEZONE
-		sjmp settings_cont3
+	cjne a, #SETTINGS_SHOW_DATE_ON_OFF_STATE, settings_cont2
+		lcall SETTINGS_SHOW_DATE_ON_OFF
+		sjmp settings_cont4
 	settings_cont2:
 
-	cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont3
-		lcall SETTINGS_SET_SNOOZE
+	cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont3
+		lcall SETTINGS_SET_TIMEZONE
+		sjmp settings_cont4
 	settings_cont3:
 
-	; check for a settings button press
-	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
-	jnb TRANSITION_STATE?, settings_cont4
-		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
-		ljmp settings_cont5
+	cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont4
+		lcall SETTINGS_SET_SNOOZE
 	settings_cont4:
 
 	; Check for a timeout event
 	mov a, TIMEOUT
 	cjne a, #00h, settings_cont5
-		; do some exiting actions
-		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+		; transition the decatron state
+		mov DECA_STATE, #DECA_COUNTING_SECONDS_STATE
+
+		; check if the timeout occurred while the user was setting the timezone
+		mov a, SETTINGS_SUB_STATE
+		cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont6
+			lcall APPLY_TIMEZONE_TO_UTC			; apply the timezone offset
+			ljmp settings_cont7
+		settings_cont6:
+
+		cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont7
+			; recalculate the SNOOZE_COUNT_PER_DECA_PIN
+			mov a, SNOOZE_DURATION
+			add a, SNOOZE_DURATION
+			mov SNOOZE_COUNT_PER_DECA_PIN_RELOAD, a
+			mov SNOOZE_COUNT_PER_DECA_PIN, SNOOZE_COUNT_PER_DECA_PIN_RELOAD
+		settings_cont7:
+
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a timeout, go to SHOW_TIME state
 	settings_cont5:
 ret
 
@@ -959,6 +992,34 @@ SETTINGS_SHOW_TIMEZONE:
 	mov GRID1, #18h 	; "e"
 
 	; Have nixies display the current time
+	; Update the hours if 12/24 hour switch is flipped
+	mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
+
+	; Split the minutes
+	mov a, MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	;mov NIX4, HR_TENS --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	;mov NIX3, HR_ONES --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_timezone_cont0
+		lcall ENTER_SETTINGS_SET_TIMEZONE_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+		ljmp settings_show_timezone_cont1
+	settings_show_timezone_cont0:
+
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_timezone_cont1
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+	settings_show_timezone_cont1:
 ret
 
 SETTINGS_SHOW_SNOOZE:
@@ -974,12 +1035,161 @@ SETTINGS_SHOW_SNOOZE:
 	mov GRID1, #18h 	; "e"
 
 	; Have nixies display the snooze duration
+	; Split the minutes
+	mov a, SNOOZE_DURATION
+	mov b, #0Ah
+	div ab
+	mov NIX2, a
+	mov NIX1, b
+
+	; blank NIX4 & NIX3 (if using 74141 nixie driver -- OUR CASE)
+	; display 0 on NIX4 & NIX3 (if using 7441A nixie driver)
+	mov NIX4, #0Ah
+	mov NIX3, #0Ah
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_snooze_cont0
+		lcall ENTER_SETTINGS_SET_SNOOZE_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+		ljmp settings_show_snooze_cont1
+	settings_show_snooze_cont0:
+
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_snooze_cont1
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+	settings_show_snooze_cont1:
+ret
+
+SETTINGS_SHOW_DATE_ON_OFF:
+	; Have VFD display "date on"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #0FFh	; BLANK
+	mov GRID7, #19h		; "d"
+	mov GRID6, #0Eh 	; "a"
+	mov GRID5, #13h 	; "t"
+	mov GRID4, #18h 	; "e"
+	mov GRID3, #0FFh 	; BLANK		
+	mov GRID2, #17h 	; "o"
+	mov GRID1, #11h 	; "n"
+
+	; Have nixies display the state of the DATE_ON? bit
+	jb DATE_ON?, settings_show_date_on_off_cont0
+		mov NIX1, #00h
+		ljmp settings_show_date_on_off_cont1
+	settings_show_date_on_off_cont0:
+		mov NIX1, #01h
+	settings_show_date_on_off_cont1:
+
+	; blank NIX4, NIX3, & NIX2 (if using 74141 nixie driver -- OUR CASE)
+	; display 0 on NIX4, NIX3, & NIX2 (if using 7441A nixie driver)
+	mov NIX4, #0Ah
+	mov NIX3, #0Ah
+	mov NIX2, #0Ah
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_date_on_off_cont2
+		cpl DATE_ON? 	 		; if there was a short press (TRANSITION_STATE? bit is set), toggle DATE_ON? bit
+		ljmp settings_show_date_on_off_cont3
+	settings_show_date_on_off_cont2:
+
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_date_on_off_cont3
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+	settings_show_date_on_off_cont3:
 ret
 
 SETTINGS_SET_TIMEZONE:
+	; ; Update the hours if 12/24 hour switch is flipped    <-- NOTE:  THIS CAUSES THE HOURS TO FLASH
+	; mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	; lcall TWLV_TWFR_HOUR_ADJ
+
+	; Split the minutes
+	mov a, MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	; Display the timezone offset
+	; grids 4 through 9 are set in ENTER_SETTINGS_SET_TIMEZONE_STATE
+	mov a, TIMEZONE
+	clr c
+	subb a, #0Eh
+	jnc settings_set_timezone_cont2
+		; UTC offset is negative, accumulator now holds 256 minus the negative offset
+		mov GRID3, #0Ah 			; display '-' as a negative sign on grid 3
+		; get negative offset into accumulator by subtracting in opposite order
+		clr c
+		mov a, #0Eh
+		subb a, TIMEZONE 			; accumulator now holds UTC negative offset
+		sjmp settings_set_timezone_cont3
+	settings_set_timezone_cont2:
+		; UTC offset is positive, accumulator now holds it
+		mov GRID3, #0FFh 			; blank grid 3
+
+	settings_set_timezone_cont3:
+	; the accumulator holds the UTC offset (either positive or negative), and the negative sign is already displayed / not displayed in grid 3
+	; display the UTC offset
+	mov b, #0Ah
+	div ab
+	mov GRID2, a
+	mov GRID1, b
+
+	; display the minutes
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	; calculate the hours with the UTC offset applied
+	mov a, TIMEZONE
+	add a, HOURS 					; add HOURS to TIMEZONE
+	clr c
+	subb a, #0Eh 					; remove the offset of TIMEZONE
+	jnc settings_set_timezone_cont4 		; determine if the hours rolled under
+		; the hours rolled under, so wrap it around to 23 again
+		add a, #18h 				; add 24 (dec) to the accumulator to get the result within 0 and 23
+		sjmp settings_set_timezone_cont5
+
+	settings_set_timezone_cont4:
+	; the hours did not roll under, so check if the hours rolled over
+	clr c
+	subb a, #18h 					; subtract 24 (dec) from the accumulator to determine if a is between 0 and 23 or above 23
+	jnc settings_set_timezone_cont5
+		; add 24 (dec) back to the total to get the proper hours with UTC offset applied
+		add a, #18h 				; add 24 (dec) to the accumulator to get the result within 0 and 23
+
+	settings_set_timezone_cont5:
+	; the hours with the UTC offset applied are in the accumulator and ready to display
+	mov b, #0Ah
+	div ab
+	mov NIX4, a
+	mov NIX3, b
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_set_timezone_cont0
+		setb TIMEZONE_SET? 								; indicate that the timezone has been set
+		lcall APPLY_TIMEZONE_TO_UTC 					; apply the set timezone to the current time registers which are holding UTC time
+		lcall EXIT_SETTINGS_SET_TIMEZONE_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	settings_set_timezone_cont0:
 ret
 
 SETTINGS_SET_SNOOZE:
+	; Have nixies display the snooze duration
+	; Split the minutes
+	mov a, SNOOZE_DURATION
+	mov b, #0Ah
+	div ab
+	mov NIX2, a
+	mov NIX1, b
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_set_snooze_cont0
+		lcall EXIT_SETTINGS_SET_SNOOZE_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	settings_set_snooze_cont0:
 ret
 
 
@@ -988,9 +1198,9 @@ ret
 GPS_OBTAIN_FIX:
 	; Display hours and minutes.  Everything else is taken care of in interrupt-driven code.
 
-	; Update the hours if 12/24 hour switch is flipped
-	mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
-	lcall TWLV_TWFR_HOUR_ADJ
+	; ; Update the hours if 12/24 hour switch is flipped
+	; mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	; lcall TWLV_TWFR_HOUR_ADJ
 
 	; Split the minutes
 	mov a, MINUTES
@@ -1037,9 +1247,9 @@ ret
 GPS_OBTAIN_DATA:
 	; Display hours and minutes.  Everything else is taken care of in interrupt-driven code.
 
-	; Update the hours if 12/24 hour switch is flipped
-	mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
-	lcall TWLV_TWFR_HOUR_ADJ
+	; ; Update the hours if 12/24 hour switch is flipped
+	; mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	; lcall TWLV_TWFR_HOUR_ADJ
 
 	; Split the minutes
 	mov a, MINUTES
@@ -1067,6 +1277,23 @@ GPS_OBTAIN_DATA:
 				sjmp gps_obtain_data_cont0
 	gps_obtain_data_cont1:
 
+
+	; ADDED BELOW BLOCK AS TEST ========== 7/31/2020 TO FIX GETTING STUCK AFTER OBTAINING FIX AND DISPLAYING '-29' ON VFD
+	; check if syncing occurred and need to go to GPS_SET_TIMEZONE_STATE
+	jnb P1.7, gps_obtain_data_cont4
+		; check TIMEZONE_SET? bit
+		jb TIMEZONE_SET?, gps_obtain_data_cont5 					
+			; if TIMEZONE_SET? bit is not set, let user input timezone
+			lcall ENTER_GPS_SET_TIMEZONE_STATE 						; update GPS_SYNC_SUB_STATE
+			sjmp gps_obtain_data_cont0
+		gps_obtain_data_cont5:
+			; if TIMEZONE_SET? bit is set, user has already set timezone, so go directly to SHOW_TIME_STATE
+			lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+			sjmp gps_obtain_data_cont0 								; jump to end
+	gps_obtain_data_cont4:
+	; ====================================
+
+
 	; Check for timeout event
 	mov a, TIMEOUT
 	cjne a, #00h, gps_obtain_data_cont0
@@ -1082,7 +1309,7 @@ GPS_OBTAIN_DATA:
 ret
 
 GPS_SET_TIMEZONE:
-	; ; Update the hours if 12/24 hour switch is flipped
+	; ; Update the hours if 12/24 hour switch is flipped    <-- NOTE:  THIS CAUSES THE HOURS TO FLASH
 	; mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 	; lcall TWLV_TWFR_HOUR_ADJ
 
@@ -1097,13 +1324,13 @@ GPS_SET_TIMEZONE:
 	; grids 4 through 9 are set in ENTER_GPS_SET_TIMEZONE_STATE
 	mov a, TIMEZONE
 	clr c
-	subb a, #0Bh
+	subb a, #0Eh
 	jnc gps_set_timezone_cont2
 		; UTC offset is negative, accumulator now holds 256 minus the negative offset
 		mov GRID3, #0Ah 			; display '-' as a negative sign on grid 3
 		; get negative offset into accumulator by subtracting in opposite order
 		clr c
-		mov a, #0Bh
+		mov a, #0Eh
 		subb a, TIMEZONE 			; accumulator now holds UTC negative offset
 		sjmp gps_set_timezone_cont3
 	gps_set_timezone_cont2:
@@ -1126,7 +1353,7 @@ GPS_SET_TIMEZONE:
 	mov a, TIMEZONE
 	add a, HOURS 					; add HOURS to TIMEZONE
 	clr c
-	subb a, #0Bh 					; remove the offset of TIMEZONE
+	subb a, #0Eh 					; remove the offset of TIMEZONE
 	jnc gps_set_timezone_cont4 		; determine if the hours rolled under
 		; the hours rolled under, so wrap it around to 23 again
 		add a, #18h 				; add 24 (dec) to the accumulator to get the result within 0 and 23
@@ -1644,15 +1871,17 @@ SERIAL_SERVICE:
 				; HAVE RECEIVED COMPLETE GPS NMEA $GPRMC SENTENCE
 				setb P1.7 													; turn on GPS SYNC light
 				lcall LOAD_GPS_DATA 										; load values into SECONDS, MINUTES, HOURS, DAY, MONTH, and YEAR
-				; check TIMEZONE_SET? bit
-				jb TIMEZONE_SET?, serial_service_cont14 					
-					; if TIMEZONE_SET? bit is not set, let user input timezone
-					lcall ENTER_GPS_SET_TIMEZONE_STATE 						; update GPS_SYNC_SUB_STATE
-					sjmp serial_service_end
-				serial_service_cont14:
-					; if TIMEZONE_SET? bit is set, user has already set timezone, so go directly to SHOW_TIME_STATE
-					lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
-					sjmp serial_service_end 								; jump to end
+
+				; Block below may be causing bug, so moved into a function (GPS_OBTAIN_DATA) called by MAIN
+				; ; check TIMEZONE_SET? bit
+				; jb TIMEZONE_SET?, serial_service_cont14 					
+				; 	; if TIMEZONE_SET? bit is not set, let user input timezone
+				; 	lcall ENTER_GPS_SET_TIMEZONE_STATE 						; update GPS_SYNC_SUB_STATE
+				; 	sjmp serial_service_end
+				; serial_service_cont14:
+				; 	; if TIMEZONE_SET? bit is set, user has already set timezone, so go directly to SHOW_TIME_STATE
+				; 	lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+				; 	sjmp serial_service_end 								; jump to end
 
 	serial_service_cont13:
 
@@ -1675,6 +1904,8 @@ ret
 ; ====== State Transition Functions ======
 CHECK_FOR_ROT_ENC_SHORT_PRESS:
 	; This function is used to transisiton between sub-states, such as SET_MM, SET_DD, etc. in SET_TIME_STATE
+	clr TRANSITION_STATE? 							; clear the TRANSITION_STATE? bit
+
 	jnb P3.6, check_short_press_cont0				; check if rotary encoder is still pressed
 		clr BUTTON_FLAG								; if not, clear the encoder button flag
 	check_short_press_cont0:
@@ -1747,6 +1978,8 @@ ret
 
 CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS:
 	; This function is used to transisiton between SHOW_TIME and SETTINGS states
+	clr TRANSITION_STATE? 							; clear the TRANSITION_STATE? bit
+
 	jnb P3.7, check_settings_short_press_cont0					; check if settings button is still pressed
 		clr SETTINGS_BUTTON_FLAG								; if not, clear the settings button flag
 	check_settings_short_press_cont0:
@@ -1771,10 +2004,16 @@ SET_TIME_STATE_TO_SHOW_TIME_STATE:
 	clr EX0						; disable external interrupt 0
 	clr EX1						; disable external interrupt 1
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	mov SECONDS, #00h 							; set seconds back to 0
+
+	; Turn off the VFD if DATE_ON? is not set
+	jb DATE_ON?, set_time_state_to_show_time_state_cont0
+		; VFD should be off
+		setb P1.0
+	set_time_state_to_show_time_state_cont0:
 
 	; Update DECA_STATE
 	lcall ENTER_DECA_COUNTING_SECONDS_STATE
@@ -1803,6 +2042,9 @@ SHOW_TIME_STATE_TO_SHOW_ALARM_STATE:
 	mov GRID2, #011h 	; "n"
 	mov GRID1, #011h 	; "n"
 
+	; turn on the VFD (always on when not in SHOW_TIME or GPS_SYNC)
+	clr P1.0
+
 	; Update CLOCK_STATE
 	mov CLOCK_STATE, #SHOW_ALARM_STATE
 ret
@@ -1825,8 +2067,8 @@ SHOW_TIME_STATE_TO_SET_TIME_STATE:
 	; Update SET_TIME_SUB_STATE
 	mov SET_TIME_SUB_STATE, #SET_MM_STATE
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; Move in mask values
 	mov VFD_FLASH_MASK, #0FCh
@@ -1837,6 +2079,9 @@ SHOW_TIME_STATE_TO_SET_TIME_STATE:
 	mov LOWER_BOUND, #01h 					; months can be 1 min
 
 	mov R0, #4Ch							; corresponds to memory address of MONTH
+
+	; turn on the VFD (always on when not in SHOW_TIME or GPS_SYNC)
+	clr P1.0
 
 	; Update DECA_STATE
 	lcall ENTER_DECA_FLASHING_STATE
@@ -1864,8 +2109,8 @@ SHOW_ALARM_STATE_TO_SET_ALARM_STATE:
 	clr ROT_FLAG					; clear the ROT_FLAG
 	clr INC_LEAP_YEAR? 				; clear the INC_LEAP_YEAR? flag
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; Move in mask values
 	mov VFD_FLASH_MASK, #0FFh
@@ -1890,8 +2135,8 @@ SET_ALARM_STATE_TO_SHOW_ALARM_STATE:
 	; lcall ADJUST_TIMEOUT
 	mov TIMEOUT, TIMEOUT_LENGTH
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	clr EX0						; disable external interrupt 0
 	clr EX1						; disable external interrupt 1
@@ -1910,6 +2155,12 @@ SHOW_ALARM_STATE_TO_SHOW_TIME_STATE:
 	mov GRID6, #0Ah 	; write dash to grid 6 for date
 	mov GRID3, #0Ah 	; write dash to grid 3 for date
 
+	; Turn off the VFD if DATE_ON? is not set
+	jb DATE_ON?, show_alarm_state_to_show_time_state_cont0
+		; VFD should be off
+		setb P1.0
+	show_alarm_state_to_show_time_state_cont0:
+
 	; Update CLOCK_STATE
 	mov CLOCK_STATE, #SHOW_TIME_STATE
 ret
@@ -1919,8 +2170,8 @@ SETTINGS_STATE_TO_SHOW_TIME_STATE:
 	mov GRID6, #0Ah 	; write dash to grid 6 for date
 	mov GRID3, #0Ah 	; write dash to grid 3 for date
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	clr EX0						; disable external interrupt 0
 	clr EX1						; disable external interrupt 1
@@ -1928,11 +2179,16 @@ SETTINGS_STATE_TO_SHOW_TIME_STATE:
 	; Update DECA_STATE
 	; lcall ENTER_DECA_COUNTING_SECONDS_STATE
 
+	; Turn off the VFD if DATE_ON? is not set
+	jb DATE_ON?, settings_state_to_show_time_state_cont0
+		; VFD should be off
+		setb P1.0
+	settings_state_to_show_time_state_cont0:
+
 	; Update CLOCK_STATE
 	mov CLOCK_STATE, #SHOW_TIME_STATE
 	; lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
 	;          									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
-
 ret
 
 SHOW_TIME_STATE_TO_SETTINGS_STATE:
@@ -1951,14 +2207,17 @@ SHOW_TIME_STATE_TO_SETTINGS_STATE:
 
 	clr ROT_FLAG					; clear the ROT_FLAG
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; Set the upper and lower bounds
-	mov UPPER_BOUND, #02h 					; SETTINGS_SUB_STATE can be 2 max
+	mov UPPER_BOUND, #NUMBER_OF_SETTINGS 	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
 	mov LOWER_BOUND, #01h 					; SETTINGS_SUB_STATE can be 1 min
 
 	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
+
+	; turn on the VFD (always on when not in SHOW_TIME or GPS_SYNC)
+	clr P1.0
 
 	; Update DECA_STATE
 	; lcall ENTER_DECA_SCROLLING_STATE
@@ -1990,8 +2249,8 @@ GPS_SYNC_STATE_TO_SHOW_TIME_STATE:
 	; Turn on the VFD
 	clr VFD_PAUSED?
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; make timer 0 and timer 2 interrupts highest priority
 	mov IP, #22h
@@ -2009,8 +2268,8 @@ ENTER_GPS_SYNC_STATE:
 	; mov TIMEOUT_LENGTH, #0Ah
 	mov TIMEOUT, TIMEOUT_LENGTH
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 	
 	; have VFD display all dashes
 	setb VFD_PAUSED? 			; pause the VFD
@@ -2067,6 +2326,12 @@ ENTER_GPS_SYNC_STATE:
 
 	; enable the GPS
 	setb P1.2
+
+	; Turn off the VFD if DATE_ON? is not set
+	jb DATE_ON?, enter_gps_sync_state_cont0
+		; VFD should be off
+		setb P1.0
+	enter_gps_sync_state_cont0:
 
 	; update GPS_SYNC_SUB_STATE
 	mov GPS_SYNC_SUB_STATE, #GPS_OBTAIN_FIX_STATE
@@ -2130,8 +2395,8 @@ ret
 ; ==== Sub-State Transition Functions ====
 ; SET_TIME sub-state transitions =========
 SET_MM_STATE_TO_SET_DD_STATE:
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; Move in mask values
 	mov VFD_FLASH_MASK, #0E7h
@@ -2146,8 +2411,8 @@ SET_MM_STATE_TO_SET_DD_STATE:
 ret
 
 SET_DD_STATE_TO_SET_YY_STATE:
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; Move in mask values
 	mov VFD_FLASH_MASK, #3Fh
@@ -2162,8 +2427,8 @@ SET_DD_STATE_TO_SET_YY_STATE:
 ret
 
 SET_YY_STATE_TO_SET_HR_STATE:
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; Move in mask values
 	mov VFD_FLASH_MASK, #0FFh
@@ -2182,8 +2447,8 @@ SET_YY_STATE_TO_SET_HR_STATE:
 ret
 
 SET_HR_STATE_TO_SET_MIN_STATE:
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; Move in mask values
 	mov VFD_FLASH_MASK, #0FFh
@@ -2200,8 +2465,8 @@ ret
 
 ; SET_ALARM sub-state transitions ========
 SET_ALARM_HR_STATE_TO_SET_ALARM_MIN_STATE:
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; Move in mask values
 	mov VFD_FLASH_MASK, #0FFh
@@ -2222,8 +2487,8 @@ ENTER_GPS_OBTAIN_DATA_STATE:
 	mov TIMEOUT_LENGTH, #78h
 	mov TIMEOUT, TIMEOUT_LENGTH
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; make serial port interrupt highest priority
 	mov IP, #10h
@@ -2269,8 +2534,8 @@ ret
 ENTER_GPS_SET_TIMEZONE_STATE:
 	; no timeout in this state so the user must input a timezone
 
-	; Clear the TRANSITION_STATE? bit
-	clr TRANSITION_STATE?
+	; ; Clear the TRANSITION_STATE? bit
+	; clr TRANSITION_STATE?
 
 	; disable the GPS
 	clr P1.2
@@ -2304,8 +2569,8 @@ ENTER_GPS_SET_TIMEZONE_STATE:
 	; grids 1, 2, and 3 are set in GPS_SET_TIMEZONE function
 
 	; Set the upper and lower bounds
-	mov UPPER_BOUND, #19h 					; TIMEZONE can be 25 (dec) max
-	mov LOWER_BOUND, #00h 					; TIMEZONE can be 0 min
+	mov UPPER_BOUND, #TIMEZONE_MAX 			; TIMEZONE can be 28 (dec) max
+	mov LOWER_BOUND, #TIMEZONE_MIN 			; TIMEZONE can be 3 min
 
 	mov R0, #70h							; corresponds to memory address of TIMEZONE
 
@@ -2329,6 +2594,89 @@ ENTER_GPS_SET_TIMEZONE_STATE:
 
 	; update GPS_SYNC_SUB_STATE
 	mov GPS_SYNC_SUB_STATE, #GPS_SET_TIMEZONE_STATE
+ret
+
+; SETTINGS sub-state transitions =========
+ENTER_SETTINGS_SET_TIMEZONE_STATE:
+	; Move in mask values
+	mov VFD_FLASH_MASK, #1Fh 				; flash grids 1, 2, and 3
+	mov NIX_FLASH_MASK, #0FFh
+
+	; Display "Utc" on the VFD
+	; mov GRID9, #0FFh 						; blank grid 9       		<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
+	; mov GRID8, #12h 						; display 'U' on grid 8		<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
+	; mov GRID7, #13h 						; display 't' on grid 7		<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
+	; mov GRID6, #14h 						; display 'c' on grid 6		<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
+	; mov GRID5, #0FFh 						; blank grid 5				<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
+	mov GRID4, #0FFh 						; blank grid 4
+	; grids 1, 2, and 3 are set in SETTINGS_SET_TIMEZONE function
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #TIMEZONE_MAX 			; TIMEZONE can be 28 (dec) max
+	mov LOWER_BOUND, #TIMEZONE_MIN 			; TIMEZONE can be 3 min
+
+	mov R0, #70h							; corresponds to memory address of TIMEZONE
+
+	; Remove the current timezone offset from the HOURS, DAY, MONTH, YEAR registers to revert them back to UTC
+	lcall UNAPPLY_TIMEZONE_TO_GET_UTC
+
+	; update DECA_STATE
+	lcall ENTER_DECA_FLASHING_STATE
+
+ 	; Update SETTINGS_SUB_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SET_TIMEZONE_STATE
+ret
+
+EXIT_SETTINGS_SET_TIMEZONE_STATE:
+	; Update SETTINGS_SUB_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
+
+	; update DECA_STATE
+	lcall ENTER_DECA_COUNTING_SECONDS_STATE 	; TODO:  this may change to scrolling
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
+	mov LOWER_BOUND, #01h 					; SETTINGS_SUB_STATE can be 1 min
+
+	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
+ret
+
+ENTER_SETTINGS_SET_SNOOZE_STATE:
+	; Move in mask values
+	mov VFD_FLASH_MASK, #0FFh
+	mov NIX_FLASH_MASK, #3Fh
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #SNOOZE_DURATION_MAX 	; SNOOZE_DURATION can be 90 (dec) max
+	mov LOWER_BOUND, #SNOOZE_DURATION_MIN 	; SNOOZE_DURATION can be 1 min
+
+	mov R0, #5Eh							; corresponds to memory address of SNOOZE_DURATION
+
+	; update DECA_STATE
+	lcall ENTER_DECA_FLASHING_STATE
+
+ 	; Update SETTINGS_SUB_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SET_SNOOZE_STATE
+ret
+
+EXIT_SETTINGS_SET_SNOOZE_STATE:
+	; Recalculate the SNOOZE_COUNT_PER_DECA_PIN
+	mov a, SNOOZE_DURATION
+	add a, SNOOZE_DURATION
+	mov SNOOZE_COUNT_PER_DECA_PIN_RELOAD, a
+	mov SNOOZE_COUNT_PER_DECA_PIN, SNOOZE_COUNT_PER_DECA_PIN_RELOAD
+
+	; Update SETTINGS_SUB_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_SNOOZE_STATE
+
+	; update DECA_STATE
+	lcall ENTER_DECA_COUNTING_SECONDS_STATE 	; TODO:  this may change to scrolling
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
+	mov LOWER_BOUND, #01h 					; SETTINGS_SUB_STATE can be 1 min
+
+	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
 ret
 
 ; ========================================
@@ -2488,6 +2836,7 @@ UPDATE_VFD:
 	; A VFD_NUM (@R1) value of #16h corresponds to a "Z" for grids 1-8
 	; A VFD_NUM (@R1) value of #17h corresponds to a "o" for grids 1-8
 	; A VFD_NUM (@R1) value of #18h corresponds to a "e" for grids 1-8
+	; A VFD_NUM (@R1) value of #19h corresponds to a "d" for grids 1-8
 
 	push 1							; push R1 onto the stack to preserve its value
 	push acc						; push a onto the stack to preserve its value
@@ -2686,6 +3035,13 @@ UPDATE_VFD:
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
 	vfd_cont24:
 
+	; "d" numeral
+	cjne @R1, #19h, vfd_cont25
+		mov SBUF, #7Ah				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont25:
+
 	
 	setb P3.5						; load the MAX6921
 	clr P3.5						; latch the MAX6921
@@ -2698,9 +3054,9 @@ UPDATE_VFD:
 	rlc a 								; rotate the acculator left through carry (NOTE! the carry flag gest rotated into bit 0)
 	mov GRID_EN_2, a 					; move the rotated result back into GRID_EN_2
 	clr c 								; clear the carry flag
-	cjne R1, #3Ch, vfd_cont25 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
+	cjne R1, #3Ch, vfd_cont26 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
 		lcall VFD_RESET					; reset the VFD cycle
-	vfd_cont25:
+	vfd_cont26:
 
 	pop PSW
 	pop acc					; restore value of a to value before UPDATE_VFD was called
@@ -3487,7 +3843,7 @@ APPLY_TIMEZONE_TO_UTC:
 	mov a, TIMEZONE
 	add a, HOURS 							; add HOURS to TIMEZONE
 	clr c
-	subb a, #0Bh 							; remove the offset of TIMEZONE
+	subb a, #0Eh 							; remove the offset of TIMEZONE
 
 	jnc apply_timezone_to_utc_cont0 		; determine if the hours rolled under
 		; the hours rolled under (HOURS < 0), so wrap it around to 23 again
@@ -3514,6 +3870,25 @@ APPLY_TIMEZONE_TO_UTC:
 
 	pop PSW
 	pop acc
+ret
+
+UNAPPLY_TIMEZONE_TO_GET_UTC:
+	; This function unapplies the timezone offset stored in TIMEZONE to the HOURS, MONTH, DAY, and YEAR registers.
+	; NOTE:  Be careful when calling this function -- this function is intended to strip the HOURS, etc. registers from their applied
+	; timezone offsets such that what remains in HOURS, etc. registers is UTC time.
+
+	; flip the current value in TIMEZONE about its offset (dec 14, hex #0Eh)
+	mov a, #1Ch 			; move 28 (dec) into the accumulator
+	subb a, TIMEZONE 		; subtract the current TIMEZONE offset from 28
+	mov TIMEZONE, a 		; put the result into TIMEZONE
+
+	; call APPLY_TIMEZONE_TO_UTC, noting that what is currently stored in TIMEZONE is reversed
+	lcall APPLY_TIMEZONE_TO_UTC
+
+	; flip the TIMEZONE again so it holds the original timezone offset
+	mov a, #1Ch 			; move 28 (dec) into the accumulator
+	subb a, TIMEZONE 		; subtract the current TIMEZONE offset from 28
+	mov TIMEZONE, a 		; put the result into TIMEZONE
 ret
 
 INCREMENT_DAY:
