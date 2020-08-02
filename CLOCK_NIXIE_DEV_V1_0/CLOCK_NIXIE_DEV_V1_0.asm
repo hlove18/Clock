@@ -36,8 +36,8 @@ reti 							; exit
 ; Serial Port interrupt
 .org 0023h
 SERIAL_ISR:
-	clr RI 						; clear receive interrupt flag
 	lcall SERIAL_SERVICE 		; receive data
+	clr RI 						; clear receive interrupt flag
 reti 							; exit
 
 ; Timer 2 interrupt
@@ -45,7 +45,7 @@ reti 							; exit
 DISPLAY_ISR:
 	clr TF2					; clear timer 2 interrupt flag
 	lcall UPDATE_DISPLAYS 	; update the displays
-reti 					; exit
+reti 						; exit
 
 
 .org 100h
@@ -661,6 +661,7 @@ SHOW_TIME:
 	mov a, NEXT_CLOCK_STATE
 	cjne a, #SHOW_ALARM_STATE, show_time_cont0
 		lcall SHOW_TIME_STATE_TO_SHOW_ALARM_STATE
+		sjmp show_time_cont1
 	show_time_cont0:
 	cjne a, #SET_TIME_STATE, show_time_cont1
 		lcall SHOW_TIME_STATE_TO_SET_TIME_STATE
@@ -711,7 +712,6 @@ SET_TIME:    ; has a sub-state machine with state variable SET_ALARM_SUB_STATE
 ret
 
 SHOW_ALARM:
-
 	; Update the hours if 12/24 hour switch is flipped
 	mov R1, #5Bh 		; move the address of ALARM_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
 	lcall TWLV_TWFR_HOUR_ADJ
@@ -738,9 +738,11 @@ SHOW_ALARM:
 	mov a, NEXT_CLOCK_STATE
 	cjne a, #SHOW_TIME_STATE, show_alarm_cont0
 		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE
+		sjmp show_alarm_cont2
 	show_alarm_cont0:
 	cjne a, #SET_ALARM_STATE, show_alarm_cont1
 		lcall SHOW_ALARM_STATE_TO_SET_ALARM_STATE
+		sjmp show_alarm_cont2
 	show_alarm_cont1:
 
 	; Check for timeout event
@@ -875,9 +877,9 @@ SET_MM:
 
 	; check for a rotary encoder short press
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, set_mm_cont3 
+	jnb TRANSITION_STATE?, set_mm_cont0 
 		lcall SET_MM_STATE_TO_SET_DD_STATE	; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-	set_mm_cont3:
+	set_mm_cont0:
 ret
 
 SET_DD:
@@ -894,9 +896,9 @@ SET_DD:
 
 	; check for a rotary encoder short press
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, set_dd_cont3
+	jnb TRANSITION_STATE?, set_dd_cont0
 		lcall SET_DD_STATE_TO_SET_YY_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-	set_dd_cont3:
+	set_dd_cont0:
 ret
 
 SET_YY:
@@ -913,9 +915,9 @@ SET_YY:
 
 	; check for a rotary encoder short press
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, set_yy_cont3
+	jnb TRANSITION_STATE?, set_yy_cont0
 		lcall SET_YY_STATE_TO_SET_HR_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-	set_yy_cont3:
+	set_yy_cont0:
 ret
 
 SET_HR:
@@ -923,9 +925,9 @@ SET_HR:
 
 	; check for a rotary encoder short press
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, set_hr_cont3
+	jnb TRANSITION_STATE?, set_hr_cont0
 		lcall SET_HR_STATE_TO_SET_MIN_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-	set_hr_cont3:
+	set_hr_cont0:
 ret
 
 SET_MIN:
@@ -942,9 +944,9 @@ SET_MIN:
 
 	; check for a rotary encoder short press
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, set_min_cont3
+	jnb TRANSITION_STATE?, set_min_cont0
 		lcall SET_TIME_STATE_TO_SHOW_TIME_STATE		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-	set_min_cont3:
+	set_min_cont0:
 ret
 
 ; ===== Set Alarm Sub-State Functions ======
@@ -954,9 +956,9 @@ SET_ALARM_HR:
 
 	; check for a rotary encoder short press
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, set_alarm_hr_cont3
+	jnb TRANSITION_STATE?, set_alarm_hr_cont0
 		lcall SET_ALARM_HR_STATE_TO_SET_ALARM_MIN_STATE			; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-	set_alarm_hr_cont3:
+	set_alarm_hr_cont0:
 ret
 
 SET_ALARM_MIN:
@@ -973,9 +975,9 @@ SET_ALARM_MIN:
 
 	; check for a rotary encoder short press
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, set_alarm_min_cont3
+	jnb TRANSITION_STATE?, set_alarm_min_cont0
 		lcall SET_ALARM_STATE_TO_SHOW_ALARM_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
-	set_alarm_min_cont3:
+	set_alarm_min_cont0:
 ret
 
 ; ===== Settings Sub-State Functions ======
@@ -1118,19 +1120,19 @@ SETTINGS_SET_TIMEZONE:
 	mov a, TIMEZONE
 	clr c
 	subb a, #0Eh
-	jnc settings_set_timezone_cont2
+	jnc settings_set_timezone_cont1
 		; UTC offset is negative, accumulator now holds 256 minus the negative offset
 		mov GRID3, #0Ah 			; display '-' as a negative sign on grid 3
 		; get negative offset into accumulator by subtracting in opposite order
 		clr c
 		mov a, #0Eh
 		subb a, TIMEZONE 			; accumulator now holds UTC negative offset
-		sjmp settings_set_timezone_cont3
-	settings_set_timezone_cont2:
+		sjmp settings_set_timezone_cont2
+	settings_set_timezone_cont1:
 		; UTC offset is positive, accumulator now holds it
 		mov GRID3, #0FFh 			; blank grid 3
 
-	settings_set_timezone_cont3:
+	settings_set_timezone_cont2:
 	; the accumulator holds the UTC offset (either positive or negative), and the negative sign is already displayed / not displayed in grid 3
 	; display the UTC offset
 	mov b, #0Ah
@@ -1144,23 +1146,23 @@ SETTINGS_SET_TIMEZONE:
 
 	; calculate the hours with the UTC offset applied
 	mov a, TIMEZONE
-	add a, HOURS 					; add HOURS to TIMEZONE
+	add a, HOURS 							; add HOURS to TIMEZONE
 	clr c
-	subb a, #0Eh 					; remove the offset of TIMEZONE
-	jnc settings_set_timezone_cont4 		; determine if the hours rolled under
+	subb a, #0Eh 							; remove the offset of TIMEZONE
+	jnc settings_set_timezone_cont3 		; determine if the hours rolled under
 		; the hours rolled under, so wrap it around to 23 again
-		add a, #18h 				; add 24 (dec) to the accumulator to get the result within 0 and 23
-		sjmp settings_set_timezone_cont5
+		add a, #18h 						; add 24 (dec) to the accumulator to get the result within 0 and 23
+		sjmp settings_set_timezone_cont4
 
-	settings_set_timezone_cont4:
+	settings_set_timezone_cont3:
 	; the hours did not roll under, so check if the hours rolled over
 	clr c
-	subb a, #18h 					; subtract 24 (dec) from the accumulator to determine if a is between 0 and 23 or above 23
-	jnc settings_set_timezone_cont5
-		; add 24 (dec) back to the total to get the proper hours with UTC offset applied
-		add a, #18h 				; add 24 (dec) to the accumulator to get the result within 0 and 23
+	subb a, #18h 							; subtract 24 (dec) from the accumulator to determine if a is between 0 and 23 or above 23
+	jnc settings_set_timezone_cont4
+		; the hours did not roll over, so add 24 (dec) back to the total to get the proper hours with UTC offset applied
+		add a, #18h 						; add 24 (dec) to the accumulator to get the result within 0 and 23
 
-	settings_set_timezone_cont5:
+	settings_set_timezone_cont4:
 	; the hours with the UTC offset applied are in the accumulator and ready to display
 	mov b, #0Ah
 	div ab
@@ -1218,8 +1220,11 @@ GPS_OBTAIN_FIX:
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
 	jnb TRANSITION_STATE?, gps_obtain_fix_cont1
 		; check the state of GPS_PRESENT? bit
+		; Note:  the clock is only in GPS_OBTAIN_FIX without a physical GPS present if the clock is just starting up.  GPS_PRESENT? bit is initialized to be
+		; false.  Thus, if the clock isn't sure if a GPS is present or not at this point, it just hasn't had enough time to tell if one is there or not.  This
+		; can be figured out in less than a couple seconds.  Therefore, if GPS_PRESENT? is not set at this point, the clock ignores the gesture.
 		jnb GPS_PRESENT?, gps_obtain_fix_cont1
-			; if there is a GPS present, check the state of TIMZONE_SET? bit
+			; if there is a GPS present, check the state of TIMEZONE_SET? bit
 			jnb TIMEZONE_SET?, gps_obtain_fix_cont2
 				; TIMEZONE has been set:
 				lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
@@ -1325,19 +1330,19 @@ GPS_SET_TIMEZONE:
 	mov a, TIMEZONE
 	clr c
 	subb a, #0Eh
-	jnc gps_set_timezone_cont2
+	jnc gps_set_timezone_cont1
 		; UTC offset is negative, accumulator now holds 256 minus the negative offset
 		mov GRID3, #0Ah 			; display '-' as a negative sign on grid 3
 		; get negative offset into accumulator by subtracting in opposite order
 		clr c
 		mov a, #0Eh
 		subb a, TIMEZONE 			; accumulator now holds UTC negative offset
-		sjmp gps_set_timezone_cont3
-	gps_set_timezone_cont2:
+		sjmp gps_set_timezone_cont2
+	gps_set_timezone_cont1:
 		; UTC offset is positive, accumulator now holds it
 		mov GRID3, #0FFh 			; blank grid 3
 
-	gps_set_timezone_cont3:
+	gps_set_timezone_cont2:
 	; the accumulator holds the UTC offset (either positive or negative), and the negative sign is already displayed / not displayed in grid 3
 	; display the UTC offset
 	mov b, #0Ah
@@ -1354,20 +1359,20 @@ GPS_SET_TIMEZONE:
 	add a, HOURS 					; add HOURS to TIMEZONE
 	clr c
 	subb a, #0Eh 					; remove the offset of TIMEZONE
-	jnc gps_set_timezone_cont4 		; determine if the hours rolled under
+	jnc gps_set_timezone_cont3 		; determine if the hours rolled under
 		; the hours rolled under, so wrap it around to 23 again
 		add a, #18h 				; add 24 (dec) to the accumulator to get the result within 0 and 23
-		sjmp gps_set_timezone_cont5
+		sjmp gps_set_timezone_cont4
 
-	gps_set_timezone_cont4:
+	gps_set_timezone_cont3:
 	; the hours did not roll under, so check if the hours rolled over
 	clr c
 	subb a, #18h 					; subtract 24 (dec) from the accumulator to determine if a is between 0 and 23 or above 23
-	jnc gps_set_timezone_cont5
-		; add 24 (dec) back to the total to get the proper hours with UTC offset applied
+	jnc gps_set_timezone_cont4
+		; the hours did not roll over, so add 24 (dec) back to the total to get the proper hours with UTC offset applied
 		add a, #18h 				; add 24 (dec) to the accumulator to get the result within 0 and 23
 
-	gps_set_timezone_cont5:
+	gps_set_timezone_cont4:
 	; the hours with the UTC offset applied are in the accumulator and ready to display
 	mov b, #0Ah
 	div ab
@@ -1394,6 +1399,7 @@ ALARM_ENABLED:
 			cjne a, MINUTES, alarm_enabled_cont1 						; compare alarm minutes to current minutes
 				mov a, #00h
 				cjne a, SECONDS, alarm_enabled_cont1 					; compare current seconds to 0
+					; it is currently the right time to fire the alarm
 					; TODO:  check if we are in a set time or set alarm state, in which case don't fire the alarm (jump to alarm_enabled_cont1 )
 
 					; check if CLOCK_STATE is GPS_SYNC_STATE
@@ -1421,10 +1427,12 @@ ALARM_DISABLED:
 ret
 
 ALARM_FIRING:
-	; snooze events are detected in CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS, which calls ALARM_FIRING_STATE_TO_ALARM_SNOOZING_STATE
-	jb P0.5, alarm_firing_cont1 										; monitor the state of the alarm on/off switch
-		lcall ALARM_FIRING_STATE_TO_ALARM_DISABLED_STATE 				; alarm is disabled, so transistion to alarm disabled state
-	alarm_firing_cont1:
+	; snooze events are detected in CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS, which calls ALARM_FIRING_STATE_TO_ALARM_SNOOZING_STATE,
+	; so the only event to detect here is if the alarm switch turns off.
+
+	jb P0.5, alarm_firing_cont0 										; monitor the state of the alarm on/off switch
+		lcall ALARM_FIRING_STATE_TO_ALARM_DISABLED_STATE 				; alarm is disabled, so transition to alarm disabled state
+	alarm_firing_cont0:
 ret
 
 ALARM_SNOOZING:
@@ -1621,7 +1629,8 @@ SERIAL_SERVICE:
 	; Uses R1 as a data pointer
 	
 	; push registers/accumulator
-	push acc 
+	push acc
+	push PSW   		; necessary because cjne commands affect the carry bit
 	; push 0
 	push 1
 	push 3
@@ -1872,7 +1881,7 @@ SERIAL_SERVICE:
 				setb P1.7 													; turn on GPS SYNC light
 				lcall LOAD_GPS_DATA 										; load values into SECONDS, MINUTES, HOURS, DAY, MONTH, and YEAR
 
-				; Block below may be causing bug, so moved into a function (GPS_OBTAIN_DATA) called by MAIN
+				; Block below may be causing bug, so moved into a function (GPS_OBTAIN_DATA) called by MAIN 7/31/2020
 				; ; check TIMEZONE_SET? bit
 				; jb TIMEZONE_SET?, serial_service_cont14 					
 				; 	; if TIMEZONE_SET? bit is not set, let user input timezone
@@ -1898,6 +1907,7 @@ SERIAL_SERVICE:
 	pop 3
 	pop 1
 	; pop 0
+	pop PSW
 	pop acc 
 ret
 
@@ -2521,8 +2531,6 @@ ENTER_GPS_OBTAIN_DATA_STATE:
 
 	; Initialize data pointer
 	mov GPS_POINTER, #08h  						; load GPS_POINTER with memory address of RECEIVED_GPS_HRS_TENS
-
-	; update how fast decatron spins?
 
 	; update GPS_OBTAIN_DATA_SUB_STATE
 	mov GPS_OBTAIN_DATA_SUB_STATE, #GPS_WAIT_FOR_DOLLAR
@@ -3638,71 +3646,71 @@ DD_ADJ:
 	January:
 	cjne R2, #01h, February
 		mov UPPER_BOUND, #1Fh 				; days can be 31 max
-		ljmp set_dd_cont0 					; no need to check the day, continue
+		ljmp dd_adj_cont0 					; no need to check the day, continue
 
 	February:
 	cjne R2, #02h, March
 		mov UPPER_BOUND, #1Dh 				; days can be 29 max
-		ljmp set_dd_cont1 					; jump to check that the day is legal
+		ljmp dd_adj_cont1 					; jump to check that the day is legal
 
 	March:
 	cjne R2, #03h, April
 		mov UPPER_BOUND, #1Fh 				; days can be 31 max
-		ljmp set_dd_cont0 					; no need to check the day, continue
+		ljmp dd_adj_cont0 					; no need to check the day, continue
 
 	April:
 	cjne R2, #04h, May
 		mov UPPER_BOUND, #1Eh 				; days can be 30 max
-		ljmp set_dd_cont1 					; jump to check that the day is legal
+		ljmp dd_adj_cont1 					; jump to check that the day is legal
 
 	May:
 	cjne R2, #05h, June
 		mov UPPER_BOUND, #1Fh 				; days can be 31 max
-		ljmp set_dd_cont0 					; no need to check the day, continue
+		ljmp dd_adj_cont0 					; no need to check the day, continue
 
 	June:
 	cjne R2, #06h, July
 		mov UPPER_BOUND, #1Eh 				; days can be 30 max
-		ljmp set_dd_cont1 					; jump to check that the day is legal
+		ljmp dd_adj_cont1 					; jump to check that the day is legal
 
 	July:
 	cjne R2, #07h, August
 		mov UPPER_BOUND, #1Fh 				; days can be 31 max
-		ljmp set_dd_cont0 					; no need to check the day, continue
+		ljmp dd_adj_cont0 					; no need to check the day, continue
 
 	August:
 	cjne R2, #08h, September
 		mov UPPER_BOUND, #1Fh 				; days can be 31 max
-		ljmp set_dd_cont0 					; no need to check the day, continue
+		ljmp dd_adj_cont0 					; no need to check the day, continue
 
 	September:
 	cjne R2, #09h, October
 		mov UPPER_BOUND, #1Eh 				; days can be 30 max
-		ljmp set_dd_cont1 					; jump to check that the day is legal
+		ljmp dd_adj_cont1 					; jump to check that the day is legal
 
 	October:
 	cjne R2, #0Ah, November
 		mov UPPER_BOUND, #1Fh 				; days can be 31 max
-		ljmp set_dd_cont0 					; no need to check the day, continue
+		ljmp dd_adj_cont0 					; no need to check the day, continue
 
 	November:
 	cjne R2, #0Bh, December
 		mov UPPER_BOUND, #1Eh 				; days can be 30 max
-		ljmp set_dd_cont1 					; jump to check that the day is legal
+		ljmp dd_adj_cont1 					; jump to check that the day is legal
 
 	December:
 	mov UPPER_BOUND, #1Fh 					; days can be 31 max
-	ljmp set_dd_cont0 						; no need to check the day, continue
+	ljmp dd_adj_cont0 						; no need to check the day, continue
 
-	set_dd_cont1:
+	dd_adj_cont1:
 	; check if DAY is greater than UPPER_BOUND
 	mov a, UPPER_BOUND 						; move UPPER_BOUND into accumulator
 	clr c 									; clear the carry bit
 	subb a, DAY 							; subtract a - DAY
-	jnc set_dd_cont0 						; jump to end if carry is not set
+	jnc dd_adj_cont0 						; jump to end if carry is not set
 		; if DAY is greater than UPPER_BOUND:
 		mov DAY, UPPER_BOUND 				; set the day to the max value
-	set_dd_cont0:
+	dd_adj_cont0:
 ret
 
 YY_ADJ:
@@ -3715,9 +3723,9 @@ YY_ADJ:
 
 	mov R2, MONTH
 
-	cjne R2, #02h, set_yy_cont0				; if the month is february
+	cjne R2, #02h, yy_adj_cont0				; if the month is february
 		mov R2, DAY 						; move DAY into R2
-		cjne R2, #1Dh, set_yy_cont0			; and if the day is the 29th 
+		cjne R2, #1Dh, yy_adj_cont0			; and if the day is the 29th 
 			setb INC_LEAP_YEAR?				; set the INC_LEAP_YEAR? flag
 			mov UPPER_BOUND, #60h 			; move 96 into UPPER_BOUND for leap day condition (don't want rollover to be 99)
 			; adjust the year if it's not a multiple of 4
@@ -3726,13 +3734,13 @@ YY_ADJ:
 			div ab							; divide: a/b with the quotient in a and remainder in b
 			mov a, b 						; move b into accumulator
 			; decrement the YEAR until it is a multiple of 4
-			set_yy_loop2:
-			jz set_yy_cont0					; jump to set_yy_cont0 if the accumulator is zero (valid leap year)
+			yy_adj_loop0:
+			jz yy_adj_cont0					; jump to yy_adj_cont0 if the accumulator is zero (valid leap year)
 				dec YEAR 					; decrement the YEAR
 				dec a 						; decrement the accumulator
-				sjmp set_yy_loop2 			; loop
+				sjmp yy_adj_loop0 			; loop
 
-	set_yy_cont0:
+	yy_adj_cont0:
 ret
 
 ASCII_TO_HEX:
