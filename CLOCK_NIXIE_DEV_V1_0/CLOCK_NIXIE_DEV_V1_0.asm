@@ -99,22 +99,28 @@ INIT:
 	SET_ALARM_MIN_STATE equ 2
 	mov SET_ALARM_SUB_STATE, #SET_ALARM_HR_STATE
 
-	; Settings Sub-State Variable:
-	.equ SETTINGS_SUB_STATE, 6Ch
-
-	SETTINGS_SHOW_TIMEZONE_STATE equ 1
-	SETTINGS_SHOW_SNOOZE_STATE equ 2
-	SETTINGS_SHOW_DATE_ON_OFF_STATE equ 3
-	SETTINGS_SET_TIMEZONE_STATE equ 11
-	SETTINGS_SET_SNOOZE_STATE equ 12
-	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
-
-	NUMBER_OF_SETTINGS equ 3 	; update this if adding more or taking out settings
-
 	; Pull P3.7 HIGH (input used for settings button)
 	setb P3.7
 
 	; ========== Settings Menu Values ===============
+	; Settings Sub-State Variable:
+	.equ SETTINGS_SUB_STATE, 6Ch
+
+	SETTINGS_SHOW_RE_SYNC_STATE 			equ 1
+	SETTINGS_SHOW_TIMEZONE_STATE 			equ 2
+	SETTINGS_SHOW_SNOOZE_STATE 				equ 3
+	SETTINGS_SHOW_DATE_ON_OFF_STATE 		equ 4
+	SETTINGS_SHOW_GPS_SYNC_TIME_STATE 		equ 5
+	SETTINGS_SHOW_AUTO_SYNC_STATE 			equ 6
+	SETTINGS_SHOW_12_OR_24_HR_MODE_STATE	equ 7
+	SETTINGS_SET_TIMEZONE_STATE       		equ 11
+	SETTINGS_SET_SNOOZE_STATE         		equ 12
+	SETTINGS_SET_GPS_SYNC_HR_STATE    		equ 13
+	SETTINGS_SET_GPS_SYNC_MIN_STATE   		equ 14
+	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
+
+	NUMBER_OF_SETTINGS equ 7 	; update this if adding more or taking out settings
+
 	; Timezone setting
 	TIMEZONE_MAX equ 28 						; this corresponds to UTC+14
 	TIMEZONE_MIN equ 3 							; this corresponds to UTC-11
@@ -127,6 +133,22 @@ INIT:
 	.equ DATE_ON?, 23h.1 		; corresponds to VFD displaying the date when in SHOW_TIME
 	setb DATE_ON? 				; default to displaying the date
 	clr P1.0 					; enable the VFD display
+
+	; GPS automatic sync time
+	; max/min values for GPS_SYNC_TIME_HOURS
+	GPS_SYNC_TIME_HOURS_MAX equ 23
+	GPS_SYNC_TIME_HOURS_MIN equ 0
+	; max/min values for GPS_SYNC_TIME_MINUTES
+	GPS_SYNC_TIME_MINUTES_MAX equ 59
+	GPS_SYNC_TIME_MINUTES_MIN equ 0
+
+	; GPS auto sync enable
+	.equ AUTO_SYNC?, 24h.2
+	setb AUTO_SYNC?
+
+	; 12 or 24 hour mode
+	.equ TWLV_HR_MODE?, 23h.2
+	clr TWLV_HR_MODE?
 
 	; ========== GPS Variables =================
 	; disable the GPS
@@ -384,6 +406,8 @@ INIT:
 	mov HOURS, 		#00h
 	mov MINUTES, 	#00h
 	mov SECONDS, 	#00h
+
+	.equ SET_TIMEZONE_HOURS, 6Bh
 	; ============================
 
 	; ====== Date Variables ======
@@ -642,8 +666,10 @@ SHOW_TIME:
 				cjne a, MINUTES, show_time_cont2 							; compare sync minutes to current minutes
 					mov a, #02h
 					cjne a, SECONDS, show_time_cont2 						; compare current seconds to 2
-						lcall ENTER_GPS_SYNC_STATE 						 	; transition to GPS_SYNC_STATE
-						sjmp show_time_cont1
+						; TODO:  turn off the GPS sync light
+						jnb AUTO_SYNC?, show_time_cont2 					; check if GPS auto sync is enabled
+							lcall ENTER_GPS_SYNC_STATE 						; transition to GPS_SYNC_STATE
+							sjmp show_time_cont1
 	show_time_cont2:
 
 	; check for a settings button press
@@ -812,53 +838,83 @@ ret
 SETTINGS:    ; has a sub-state machine with state variable SETTINGS_SUB_STATE
 	mov a, SETTINGS_SUB_STATE
 
-	cjne a, #SETTINGS_SHOW_TIMEZONE_STATE, settings_cont0
-		lcall SETTINGS_SHOW_TIMEZONE	
-		sjmp settings_cont4
+	cjne a, #SETTINGS_SHOW_RE_SYNC_STATE, settings_cont0
+		lcall SETTINGS_SHOW_RE_SYNC
+		sjmp settings_cont10
 	settings_cont0:
 
-	cjne a, #SETTINGS_SHOW_SNOOZE_STATE, settings_cont1
-		lcall SETTINGS_SHOW_SNOOZE
-		sjmp settings_cont4
+	cjne a, #SETTINGS_SHOW_TIMEZONE_STATE, settings_cont1
+		lcall SETTINGS_SHOW_TIMEZONE	
+		sjmp settings_cont10
 	settings_cont1:
 
-	cjne a, #SETTINGS_SHOW_DATE_ON_OFF_STATE, settings_cont2
-		lcall SETTINGS_SHOW_DATE_ON_OFF
-		sjmp settings_cont4
+	cjne a, #SETTINGS_SHOW_SNOOZE_STATE, settings_cont2
+		lcall SETTINGS_SHOW_SNOOZE
+		sjmp settings_cont10
 	settings_cont2:
 
-	cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont3
-		lcall SETTINGS_SET_TIMEZONE
-		sjmp settings_cont4
+	cjne a, #SETTINGS_SHOW_DATE_ON_OFF_STATE, settings_cont3
+		lcall SETTINGS_SHOW_DATE_ON_OFF
+		sjmp settings_cont10
 	settings_cont3:
 
-	cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont4
-		lcall SETTINGS_SET_SNOOZE
+	cjne a, #SETTINGS_SHOW_GPS_SYNC_TIME_STATE, settings_cont4
+		lcall SETTINGS_SHOW_GPS_SYNC_TIME
+		sjmp settings_cont10
 	settings_cont4:
+
+	cjne a, #SETTINGS_SHOW_AUTO_SYNC_STATE, settings_cont5
+		lcall SETTINGS_SHOW_AUTO_SYNC
+		sjmp settings_cont10
+	settings_cont5:
+
+	cjne a, #SETTINGS_SHOW_12_OR_24_HR_MODE_STATE, settings_cont6
+		lcall SETTINGS_SHOW_12_OR_24_HR_MODE
+		sjmp settings_cont10
+	settings_cont6:
+
+	cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont7
+		lcall SETTINGS_SET_TIMEZONE
+		sjmp settings_cont10
+	settings_cont7:
+
+	cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont8
+		lcall SETTINGS_SET_SNOOZE
+		sjmp settings_cont10
+	settings_cont8:
+
+	cjne a, #SETTINGS_SET_GPS_SYNC_HR_STATE, settings_cont9
+		lcall SETTINGS_SET_GPS_SYNC_HR
+		sjmp settings_cont10
+	settings_cont9:
+
+	cjne a, #SETTINGS_SET_GPS_SYNC_MIN_STATE, settings_cont10
+		lcall SETTINGS_SET_GPS_SYNC_MIN
+	settings_cont10:
 
 	; Check for a timeout event
 	mov a, TIMEOUT
-	cjne a, #00h, settings_cont5
+	cjne a, #00h, settings_cont11
 		; transition the decatron state
 		mov DECA_STATE, #DECA_COUNTING_SECONDS_STATE
 
-		; check if the timeout occurred while the user was setting the timezone
+		; check which settings need to be saved
 		mov a, SETTINGS_SUB_STATE
-		cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont6
-			lcall APPLY_TIMEZONE_TO_UTC			; apply the timezone offset
-			ljmp settings_cont7
-		settings_cont6:
+		cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont12 	; check if the user was setting the timezone
+			lcall APPLY_TIMEZONE_TO_UTC							; apply the timezone offset
+			ljmp settings_cont13
+		settings_cont12:
 
-		cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont7
+		cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont13 	; check if the user was setting the snooze duration
 			; recalculate the SNOOZE_COUNT_PER_DECA_PIN
 			mov a, SNOOZE_DURATION
 			add a, SNOOZE_DURATION
 			mov SNOOZE_COUNT_PER_DECA_PIN_RELOAD, a
 			mov SNOOZE_COUNT_PER_DECA_PIN, SNOOZE_COUNT_PER_DECA_PIN_RELOAD
-		settings_cont7:
+		settings_cont13:
 
 		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a timeout, go to SHOW_TIME state
-	settings_cont5:
+	settings_cont11:
 ret
 
 ; ===== Set Time Sub-State Functions =======
@@ -981,6 +1037,49 @@ SET_ALARM_MIN:
 ret
 
 ; ===== Settings Sub-State Functions ======
+SETTINGS_SHOW_RE_SYNC:
+	; Have VFD display "re-Sync"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #0FFh	; BLANK
+	mov GRID7, #0Fh		; "r"
+	mov GRID6, #18h 	; "e"
+	mov GRID5, #0Ah 	; "-"
+	mov GRID4, #15h 	; "S"
+	mov GRID3, #1Ah 	; "y"		
+	mov GRID2, #11h 	; "n"
+	mov GRID1, #14h 	; "c"
+
+	; Have nixies display the current time
+	; Update the hours if 12/24 hour switch is flipped
+	mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
+
+	; Split the minutes
+	mov a, MINUTES
+	mov b, #0Ah
+	div ab
+	mov MIN_TENS, a
+	mov MIN_ONES, b
+
+	;mov NIX4, HR_TENS --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	;mov NIX3, HR_ONES --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+	mov NIX2, MIN_TENS
+	mov NIX1, MIN_ONES
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_re_sync_cont0
+		lcall ENTER_GPS_SYNC_STATE 				; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+		ljmp settings_show_re_sync_cont1
+	settings_show_re_sync_cont0:
+
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_re_sync_cont1
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+	settings_show_re_sync_cont1:
+ret
+
 SETTINGS_SHOW_TIMEZONE:
 	; Have VFD display "Utc Zone"
 	mov GRID9, #0FFh    ; BLANK
@@ -1103,10 +1202,134 @@ SETTINGS_SHOW_DATE_ON_OFF:
 	settings_show_date_on_off_cont3:
 ret
 
+SETTINGS_SHOW_GPS_SYNC_TIME:
+	; Have VFD display "Sync at"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #0FFh	; BLANK
+	mov GRID7, #15h		; "S"
+	mov GRID6, #1Ah 	; "y"
+	mov GRID5, #11h 	; "n"
+	mov GRID4, #14h 	; "c"
+	mov GRID3, #0FFh 	; BLANK		
+	mov GRID2, #0Eh 	; "a"
+	mov GRID1, #13h 	; "t"
+
+	; Have nixies display the GPS sync time
+	; Split the minutes
+	mov a, GPS_SYNC_TIME_MINUTES
+	mov b, #0Ah
+	div ab
+	mov NIX2, a
+	mov NIX1, b
+	
+	; Update the hours if 12/24 hour switch is flipped
+	mov R1, #6Dh 		; move the address of GPS_SYNC_TIME_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
+
+	; ; Split the hours
+	; mov a, GPS_SYNC_TIME_HOURS
+	; mov b, #0Ah
+	; div ab
+	; mov NIX4, a
+	; mov NIX3, b
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_gps_sync_time_cont0
+		lcall ENTER_SETTINGS_SET_GPS_SYNC_HR_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+		ljmp settings_show_gps_sync_time_cont1
+	settings_show_gps_sync_time_cont0:
+
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_gps_sync_time_cont1
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE			; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+	settings_show_gps_sync_time_cont1:
+ret
+
+SETTINGS_SHOW_AUTO_SYNC:
+	; Have VFD display "AutoSync"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #0Ch		; "A"
+	mov GRID7, #1Bh		; "u"
+	mov GRID6, #13h 	; "t"
+	mov GRID5, #17h 	; "o"
+	mov GRID4, #15h 	; "S"
+	mov GRID3, #1Ah 	; "y"		
+	mov GRID2, #11h 	; "n"
+	mov GRID1, #14h 	; "c"
+
+	; Have nixies display the state of the AUTO_SYNC? bit
+	jb AUTO_SYNC?, settings_show_auto_sync_cont0
+		mov NIX1, #00h
+		ljmp settings_show_auto_sync_cont1
+	settings_show_auto_sync_cont0:
+		mov NIX1, #01h
+	settings_show_auto_sync_cont1:
+
+	; blank NIX4, NIX3, & NIX2 (if using 74141 nixie driver -- OUR CASE)
+	; display 0 on NIX4, NIX3, & NIX2 (if using 7441A nixie driver)
+	mov NIX4, #0Ah
+	mov NIX3, #0Ah
+	mov NIX2, #0Ah
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_auto_sync_cont2
+		cpl AUTO_SYNC? 	 		; if there was a short press (TRANSITION_STATE? bit is set), toggle AUTO_SYNC? bit
+		ljmp settings_show_auto_sync_cont3
+	settings_show_auto_sync_cont2:
+
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_auto_sync_cont3
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+	settings_show_auto_sync_cont3:
+ret
+
+SETTINGS_SHOW_12_OR_24_HR_MODE:
+	; Have VFD display "12 or 24"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #01h		; "1"
+	mov GRID7, #02h		; "2"
+	mov GRID6, #0FFh 	; BLANK
+	mov GRID5, #17h 	; "o"
+	mov GRID4, #0Fh 	; "r"
+	mov GRID3, #0FFh 	; BLANK
+	mov GRID2, #02h 	; "2"
+	mov GRID1, #04h 	; "4"
+
+	; Have nixies display the state of the TWLV_HR_MODE? bit
+	jb TWLV_HR_MODE?, settings_show_12_or_24_hr_mode_cont0
+		mov NIX2, #02h
+		mov NIX1, #04h
+		ljmp settings_show_12_or_24_hr_mode_cont1
+	settings_show_12_or_24_hr_mode_cont0:
+		mov NIX2, #01h
+		mov NIX1, #02h
+	settings_show_12_or_24_hr_mode_cont1:
+
+	; blank NIX4 & NIX3 (if using 74141 nixie driver -- OUR CASE)
+	; display 0 on NIX4 & NIX3 (if using 7441A nixie driver)
+	mov NIX4, #0Ah
+	mov NIX3, #0Ah
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_12_or_24_hr_mode_cont2
+		cpl TWLV_HR_MODE? 	 		; if there was a short press (TRANSITION_STATE? bit is set), toggle TWLV_HR_MODE? bit
+		ljmp settings_show_12_or_24_hr_mode_cont3
+	settings_show_12_or_24_hr_mode_cont2:
+
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_12_or_24_hr_mode_cont3
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+	settings_show_12_or_24_hr_mode_cont3:
+ret
+
 SETTINGS_SET_TIMEZONE:
-	; ; Update the hours if 12/24 hour switch is flipped    <-- NOTE:  THIS CAUSES THE HOURS TO FLASH
-	; mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
-	; lcall TWLV_TWFR_HOUR_ADJ
+	; Note:  12/24 hour adjust and displaying is done lower in this function
 
 	; Split the minutes
 	mov a, MINUTES
@@ -1164,10 +1387,17 @@ SETTINGS_SET_TIMEZONE:
 
 	settings_set_timezone_cont4:
 	; the hours with the UTC offset applied are in the accumulator and ready to display
-	mov b, #0Ah
-	div ab
-	mov NIX4, a
-	mov NIX3, b
+
+	; Taken care of with TWLV_TWFR_HOUR_ADJ
+	; mov b, #0Ah
+	; div ab
+	; mov NIX4, a
+	; mov NIX3, b
+
+	; Update the hours if 12/24 hour switch is flipped
+	mov SET_TIMEZONE_HOURS, a 	; stage the hours with UTC offset applied
+	mov R1, #6Bh 				; move the address of SET_TIMEZONE_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
 
 	; check for a rotary encoder short press
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
@@ -1194,6 +1424,51 @@ SETTINGS_SET_SNOOZE:
 	settings_set_snooze_cont0:
 ret
 
+SETTINGS_SET_GPS_SYNC_HR:
+	; Have nixies display the GPS sync time
+	; Split the minutes
+	mov a, GPS_SYNC_TIME_MINUTES
+	mov b, #0Ah
+	div ab
+	mov NIX2, a
+	mov NIX1, b
+	
+	; Split the hours
+	mov a, GPS_SYNC_TIME_HOURS
+	mov b, #0Ah
+	div ab
+	mov NIX4, a
+	mov NIX3, b
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_gps_sync_hr_cont0
+		lcall ENTER_SETTINGS_SET_GPS_SYNC_MIN_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	settings_show_gps_sync_hr_cont0:
+ret
+
+SETTINGS_SET_GPS_SYNC_MIN:
+	; Have nixies display the GPS sync time
+	; Split the minutes
+	mov a, GPS_SYNC_TIME_MINUTES
+	mov b, #0Ah
+	div ab
+	mov NIX2, a
+	mov NIX1, b
+	
+	; Split the hours
+	mov a, GPS_SYNC_TIME_HOURS
+	mov b, #0Ah
+	div ab
+	mov NIX4, a
+	mov NIX3, b
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_gps_sync_min_cont0
+		lcall EXIT_SETTINGS_SET_GPS_SYNC_TIME_STATE 		; if there was a short press (TRANSITION_STATE? bit is set), go to next state
+	settings_show_gps_sync_min_cont0:
+ret
 
 ; ===== GPS Sync Sub-State Functions ======
 
@@ -1314,9 +1589,7 @@ GPS_OBTAIN_DATA:
 ret
 
 GPS_SET_TIMEZONE:
-	; ; Update the hours if 12/24 hour switch is flipped    <-- NOTE:  THIS CAUSES THE HOURS TO FLASH
-	; mov R1, #45h 		; move the address of HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
-	; lcall TWLV_TWFR_HOUR_ADJ
+	; Note:  12/24 hour adjust and displaying is done lower in this function
 
 	; Split the minutes
 	mov a, MINUTES
@@ -1374,10 +1647,17 @@ GPS_SET_TIMEZONE:
 
 	gps_set_timezone_cont4:
 	; the hours with the UTC offset applied are in the accumulator and ready to display
-	mov b, #0Ah
-	div ab
-	mov NIX4, a
-	mov NIX3, b
+
+	; Taken care of with TWLV_TWFR_HOUR_ADJ
+	; mov b, #0Ah
+	; div ab
+	; mov NIX4, a
+	; mov NIX3, b
+
+	; Update the hours if 12/24 hour switch is flipped
+	mov SET_TIMEZONE_HOURS, a 	; stage the hours with UTC offset applied
+	mov R1, #6Bh 				; move the address of SET_TIMEZONE_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+	lcall TWLV_TWFR_HOUR_ADJ
 
 	; check for a rotary encoder short press
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
@@ -2213,7 +2493,7 @@ SHOW_TIME_STATE_TO_SETTINGS_STATE:
 	setb EX1						; enable external interrupt 1
 
 	; Update SETTINGS_SUB_STATE
-	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_RE_SYNC_STATE
 
 	clr ROT_FLAG					; clear the ROT_FLAG
 
@@ -2687,6 +2967,53 @@ EXIT_SETTINGS_SET_SNOOZE_STATE:
 	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
 ret
 
+ENTER_SETTINGS_SET_GPS_SYNC_HR_STATE:
+	; Move in mask values
+	mov VFD_FLASH_MASK, #0FFh
+	mov NIX_FLASH_MASK, #0CFh
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #GPS_SYNC_TIME_HOURS_MAX 	; GPS_SYNC_TIME_HOURS can be 23 (dec) max
+	mov LOWER_BOUND, #GPS_SYNC_TIME_HOURS_MIN 	; GPS_SYNC_TIME_HOURS can be 0 min
+
+	mov R0, #6Dh								; corresponds to memory address of GPS_SYNC_TIME_HOURS
+
+	; update DECA_STATE
+	lcall ENTER_DECA_FLASHING_STATE
+
+ 	; Update SETTINGS_SUB_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SET_GPS_SYNC_HR_STATE
+ret
+
+ENTER_SETTINGS_SET_GPS_SYNC_MIN_STATE:
+	; Move in mask values
+	mov VFD_FLASH_MASK, #0FFh
+	mov NIX_FLASH_MASK, #3Fh
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #GPS_SYNC_TIME_MINUTES_MAX 	; GPS_SYNC_TIME_MINUTES can be 59 (dec) max
+	mov LOWER_BOUND, #GPS_SYNC_TIME_MINUTES_MIN 	; GPS_SYNC_TIME_MINUTES can be 0 min
+
+	mov R0, #6Eh									; corresponds to memory address of GPS_SYNC_TIME_MINUTES
+
+ 	; Update SETTINGS_SUB_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SET_GPS_SYNC_MIN_STATE
+ret
+
+EXIT_SETTINGS_SET_GPS_SYNC_TIME_STATE:
+	; Update SETTINGS_SUB_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_GPS_SYNC_TIME_STATE
+
+	; update DECA_STATE
+	lcall ENTER_DECA_COUNTING_SECONDS_STATE 	; TODO:  this may change to scrolling
+
+	; Set the upper and lower bounds
+	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
+	mov LOWER_BOUND, #01h 					; SETTINGS_SUB_STATE can be 1 min
+
+	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
+ret
+
 ; ========================================
 
 ; =========== Display Functions ==========
@@ -2845,6 +3172,10 @@ UPDATE_VFD:
 	; A VFD_NUM (@R1) value of #17h corresponds to a "o" for grids 1-8
 	; A VFD_NUM (@R1) value of #18h corresponds to a "e" for grids 1-8
 	; A VFD_NUM (@R1) value of #19h corresponds to a "d" for grids 1-8
+	; A VFD_NUM (@R1) value of #1Ah corresponds to a "y" for grids 1-8
+	; A VFD_NUM (@R1) value of #1Bh corresponds to a "u" for grids 1-8
+	; A VFD_NUM (@R1) value of #1Ch corresponds to a "H" for grids 1-8
+	; A VFD_NUM (@R1) value of #1Dh corresponds to half of a "M" for grids 1-8
 
 	push 1							; push R1 onto the stack to preserve its value
 	push acc						; push a onto the stack to preserve its value
@@ -3050,6 +3381,34 @@ UPDATE_VFD:
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
 	vfd_cont25:
 
+	; "y" numeral
+	cjne @R1, #1Ah, vfd_cont26
+		mov SBUF, #76h				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont26:
+
+	; "u" numeral
+	cjne @R1, #1Bh, vfd_cont27
+		mov SBUF, #38h				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont27:
+
+	; "H" numeral
+	cjne @R1, #1Ch, vfd_cont28
+		mov SBUF, #6Eh				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont28:
+
+	; half of "M" numeral
+	cjne @R1, #1Dh, vfd_cont29
+		mov SBUF, #0ECh				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont29:
+
 	
 	setb P3.5						; load the MAX6921
 	clr P3.5						; latch the MAX6921
@@ -3062,9 +3421,9 @@ UPDATE_VFD:
 	rlc a 								; rotate the acculator left through carry (NOTE! the carry flag gest rotated into bit 0)
 	mov GRID_EN_2, a 					; move the rotated result back into GRID_EN_2
 	clr c 								; clear the carry flag
-	cjne R1, #3Ch, vfd_cont26 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
+	cjne R1, #3Ch, vfd_cont30 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
 		lcall VFD_RESET					; reset the VFD cycle
-	vfd_cont26:
+	vfd_cont30:
 
 	pop PSW
 	pop acc					; restore value of a to value before UPDATE_VFD was called
@@ -3599,7 +3958,8 @@ TWLV_TWFR_HOUR_ADJ:
 
 	;mov a, HOURS
 	mov a, @R1 									; move @R1 (i.e. HOURS, or ALARM_HOURS, etc.)
-	jnb P0.6, twlv_twfr_hour_adj_cont1	 		; check if 12 or 24 hour time
+	; jnb P0.6, twlv_twfr_hour_adj_cont1	 		; check if 12 or 24 hour time (use this line for a 12/24 hour mode switch)
+	jnb TWLV_HR_MODE?, twlv_twfr_hour_adj_cont1	 		; check if 12 or 24 hour time (use this line for a software 12/24 hour mode selection)
 
 	; Handle the 12-hour mode case
 	cjne a, #00h, twlv_twfr_hour_adj_cont4		; check if time is 00:xx
