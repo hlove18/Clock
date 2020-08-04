@@ -108,18 +108,23 @@ INIT:
 
 	SETTINGS_SHOW_RE_SYNC_STATE 			equ 1
 	SETTINGS_SHOW_TIMEZONE_STATE 			equ 2
+
 	SETTINGS_SHOW_SNOOZE_STATE 				equ 3
 	SETTINGS_SHOW_DATE_ON_OFF_STATE 		equ 4
+
 	SETTINGS_SHOW_GPS_SYNC_TIME_STATE 		equ 5
 	SETTINGS_SHOW_AUTO_SYNC_STATE 			equ 6
+
 	SETTINGS_SHOW_12_OR_24_HR_MODE_STATE	equ 7
+	SETTINGS_SHOW_BEEP_ON_OFF_STATE			equ 8
+
 	SETTINGS_SET_TIMEZONE_STATE       		equ 11
 	SETTINGS_SET_SNOOZE_STATE         		equ 12
 	SETTINGS_SET_GPS_SYNC_HR_STATE    		equ 13
 	SETTINGS_SET_GPS_SYNC_MIN_STATE   		equ 14
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
 
-	NUMBER_OF_SETTINGS equ 7 	; update this if adding more or taking out settings
+	NUMBER_OF_SETTINGS equ 8 	; update this if adding more or taking out settings
 
 	; Timezone setting
 	TIMEZONE_MAX equ 28 						; this corresponds to UTC+14
@@ -149,6 +154,10 @@ INIT:
 	; 12 or 24 hour mode
 	.equ TWLV_HR_MODE?, 23h.2
 	clr TWLV_HR_MODE?
+
+	; beep on/off
+	.equ BEEP_ON?, 23h.3
+	setb BEEP_ON?
 
 	; ========== GPS Variables =================
 	; disable the GPS
@@ -473,8 +482,6 @@ INIT:
 	; SNOOZE_COUNT_PER_DECA_PIN_RELOAD contains this number of seconds, calculated as twice SNOOZE_DURATION.
 	; SNOOZE_COUNT_PER_DECA_PIN initially starts with this reload value, but will be decremented in the TIMER_0_SERVICE with each
 	; second, then reloaded with SNOOZE_COUNT_PER_DECA_PIN_RELOAD when it reaches 0.
-	; 
-	; TODO:  redo this calculation when changing SNOOZE_DURATION in the settings menu.
 	mov a, SNOOZE_DURATION
 	add a, SNOOZE_DURATION
 	mov SNOOZE_COUNT_PER_DECA_PIN_RELOAD, a
@@ -511,18 +518,23 @@ INIT:
 	mov RCAP2H, #0FFh		; set high byte of timer 2 reload
 	mov RCAP2L, #00h		; set low byte of timer 2 reload
 
-	; ; Timer 0 interrupt initialization (for seconds interrupt)
-	mov TMOD, #06h 			; set timer0 as a counter for the seconds (00000110 bin = 06 hex)
+	; Timer 0 (for seconds interrupt) & 1 (for beep) interrupt initialization
+	mov TMOD, #16h 			; set timer0 as a counter for the seconds (0000 0110 bin = 06 hex)
+							; set timer1 as a timer for the beep duration (0001 0000 bin = 10 hex)
 	mov TL0, #0C4h 			; initialize TL0 (#C4h for 60Hz, #CEh for 50Hz)
-	mov TH0, #0C4h 			; initialize TH0 (#C4h for 60Hz, #CEh for 50Hz) - reload value			
+	mov TH0, #0C4h 			; initialize TH0 (#C4h for 60Hz, #CEh for 50Hz) - reload value
+	mov TL1, #00h 			; initialize TL1 for max count (16 bits)
+	mov TH1, #00h 			; initialize TH1 for max count (16 bits)
 	setb TR0 				; start timer 0
+	clr ET1 				; disable timer 1 overflow interrupt
+	clr TR1 				; keep timer 1 off
 
 	; IP (interrupt priority) register
 	; ____________________________________________
 	; | - | - | PT2 | PS | PT1 | PX1 | PT0 | PX0 |
 	; |___|___|_____|____|_____|_____|_____|_____|
 	; PT2 (IP.5): timer 2 interrupt priority bit (only 8052)
-	; PS (IP.4): serial port interrupt priority bit
+	; PS  (IP.4): serial port interrupt priority bit
 	; PT1 (IP.3): timer 1 overflow interrupt priority bit
 	; PX1 (IP.2): external interrupt 1 priority bit
 	; PT0 (IP.1): timer 0 overflow interrupt priority bit
@@ -840,81 +852,86 @@ SETTINGS:    ; has a sub-state machine with state variable SETTINGS_SUB_STATE
 
 	cjne a, #SETTINGS_SHOW_RE_SYNC_STATE, settings_cont0
 		lcall SETTINGS_SHOW_RE_SYNC
-		sjmp settings_cont10
+		sjmp settings_cont11
 	settings_cont0:
 
 	cjne a, #SETTINGS_SHOW_TIMEZONE_STATE, settings_cont1
 		lcall SETTINGS_SHOW_TIMEZONE	
-		sjmp settings_cont10
+		sjmp settings_cont11
 	settings_cont1:
 
 	cjne a, #SETTINGS_SHOW_SNOOZE_STATE, settings_cont2
 		lcall SETTINGS_SHOW_SNOOZE
-		sjmp settings_cont10
+		sjmp settings_cont11
 	settings_cont2:
 
 	cjne a, #SETTINGS_SHOW_DATE_ON_OFF_STATE, settings_cont3
 		lcall SETTINGS_SHOW_DATE_ON_OFF
-		sjmp settings_cont10
+		sjmp settings_cont11
 	settings_cont3:
 
 	cjne a, #SETTINGS_SHOW_GPS_SYNC_TIME_STATE, settings_cont4
 		lcall SETTINGS_SHOW_GPS_SYNC_TIME
-		sjmp settings_cont10
+		sjmp settings_cont11
 	settings_cont4:
 
 	cjne a, #SETTINGS_SHOW_AUTO_SYNC_STATE, settings_cont5
 		lcall SETTINGS_SHOW_AUTO_SYNC
-		sjmp settings_cont10
+		sjmp settings_cont11
 	settings_cont5:
 
 	cjne a, #SETTINGS_SHOW_12_OR_24_HR_MODE_STATE, settings_cont6
 		lcall SETTINGS_SHOW_12_OR_24_HR_MODE
-		sjmp settings_cont10
+		sjmp settings_cont11
 	settings_cont6:
 
-	cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont7
-		lcall SETTINGS_SET_TIMEZONE
-		sjmp settings_cont10
+	cjne a, #SETTINGS_SHOW_BEEP_ON_OFF_STATE, settings_cont7
+		lcall SETTINGS_SHOW_BEEP_ON_OFF
+		sjmp settings_cont11
 	settings_cont7:
 
-	cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont8
-		lcall SETTINGS_SET_SNOOZE
-		sjmp settings_cont10
+	cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont8
+		lcall SETTINGS_SET_TIMEZONE
+		sjmp settings_cont11
 	settings_cont8:
 
-	cjne a, #SETTINGS_SET_GPS_SYNC_HR_STATE, settings_cont9
-		lcall SETTINGS_SET_GPS_SYNC_HR
-		sjmp settings_cont10
+	cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont9
+		lcall SETTINGS_SET_SNOOZE
+		sjmp settings_cont11
 	settings_cont9:
 
-	cjne a, #SETTINGS_SET_GPS_SYNC_MIN_STATE, settings_cont10
-		lcall SETTINGS_SET_GPS_SYNC_MIN
+	cjne a, #SETTINGS_SET_GPS_SYNC_HR_STATE, settings_cont10
+		lcall SETTINGS_SET_GPS_SYNC_HR
+		sjmp settings_cont11
 	settings_cont10:
+
+	cjne a, #SETTINGS_SET_GPS_SYNC_MIN_STATE, settings_cont11
+		lcall SETTINGS_SET_GPS_SYNC_MIN
+	settings_cont11:
 
 	; Check for a timeout event
 	mov a, TIMEOUT
-	cjne a, #00h, settings_cont11
+	cjne a, #00h, settings_cont12
 		; transition the decatron state
 		mov DECA_STATE, #DECA_COUNTING_SECONDS_STATE
 
 		; check which settings need to be saved
 		mov a, SETTINGS_SUB_STATE
-		cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont12 	; check if the user was setting the timezone
+		cjne a, #SETTINGS_SET_TIMEZONE_STATE, settings_cont13 	; check if the user was setting the timezone
 			lcall APPLY_TIMEZONE_TO_UTC							; apply the timezone offset
-			ljmp settings_cont13
-		settings_cont12:
+			ljmp settings_cont14
+		settings_cont13:
 
-		cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont13 	; check if the user was setting the snooze duration
+		cjne a, #SETTINGS_SET_SNOOZE_STATE, settings_cont14 	; check if the user was setting the snooze duration
 			; recalculate the SNOOZE_COUNT_PER_DECA_PIN
 			mov a, SNOOZE_DURATION
 			add a, SNOOZE_DURATION
 			mov SNOOZE_COUNT_PER_DECA_PIN_RELOAD, a
 			mov SNOOZE_COUNT_PER_DECA_PIN, SNOOZE_COUNT_PER_DECA_PIN_RELOAD
-		settings_cont13:
+		settings_cont14:
 
 		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a timeout, go to SHOW_TIME state
-	settings_cont11:
+	settings_cont12:
 ret
 
 ; ===== Set Time Sub-State Functions =======
@@ -1328,6 +1345,46 @@ SETTINGS_SHOW_12_OR_24_HR_MODE:
 	settings_show_12_or_24_hr_mode_cont3:
 ret
 
+SETTINGS_SHOW_BEEP_ON_OFF:
+	; Have VFD display "beeP on"
+	mov GRID9, #0FFh    ; BLANK
+	mov GRID8, #0FFh	; BLANK
+	mov GRID7, #1Eh		; "b"
+	mov GRID6, #18h 	; "e"
+	mov GRID5, #18h 	; "e"
+	mov GRID4, #1Fh 	; "p"
+	mov GRID3, #0FFh 	; BLANK
+	mov GRID2, #17h 	; "o"
+	mov GRID1, #11h 	; "n"
+
+	; Have nixies display the state of the BEEP_ON? bit
+	jb BEEP_ON?, settings_show_beep_on_off_cont0
+		mov NIX1, #00h
+		ljmp settings_show_beep_on_off_cont1
+	settings_show_beep_on_off_cont0:
+		mov NIX1, #01h
+	settings_show_beep_on_off_cont1:
+
+	; blank NIX4, NIX3, & NIX2 (if using 74141 nixie driver -- OUR CASE)
+	; display 0 on NIX4, NIX3, & NIX2 (if using 7441A nixie driver)
+	mov NIX4, #0Ah
+	mov NIX3, #0Ah
+	mov NIX2, #0Ah
+
+	; check for a rotary encoder short press
+	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_beep_on_off_cont2
+		cpl BEEP_ON? 	 		; if there was a short press (TRANSITION_STATE? bit is set), toggle BEEP_ON? bit
+		ljmp settings_show_beep_on_off_cont3
+	settings_show_beep_on_off_cont2:
+
+	; check for a settings button press
+	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, settings_show_beep_on_off_cont3
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+	settings_show_beep_on_off_cont3:
+ret
+
 SETTINGS_SET_TIMEZONE:
 	; Note:  12/24 hour adjust and displaying is done lower in this function
 
@@ -1491,14 +1548,15 @@ GPS_OBTAIN_FIX:
 	mov NIX2, MIN_TENS
 	mov NIX1, MIN_ONES
 
-	; check for a rotary encoder short press
-	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
-	jnb TRANSITION_STATE?, gps_obtain_fix_cont1
-		; check the state of GPS_PRESENT? bit
-		; Note:  the clock is only in GPS_OBTAIN_FIX without a physical GPS present if the clock is just starting up.  GPS_PRESENT? bit is initialized to be
-		; false.  Thus, if the clock isn't sure if a GPS is present or not at this point, it just hasn't had enough time to tell if one is there or not.  This
-		; can be figured out in less than a couple seconds.  Therefore, if GPS_PRESENT? is not set at this point, the clock ignores the gesture.
-		jnb GPS_PRESENT?, gps_obtain_fix_cont1
+	; check the state of GPS_PRESENT? bit
+	; Note:  the clock is only in GPS_OBTAIN_FIX without a physical GPS present if the clock is just starting up.  GPS_PRESENT? bit is 
+	; initialized to be false.  Thus, if the clock isn't sure if a GPS is present or not at this point, it just hasn't had enough time
+	; to tell if one is there or not.  This can be figured out in less than a couple seconds.  Therefore, if GPS_PRESENT? is not set at
+	; this point, the clock ignores a rotary encoder short press.
+	jnb GPS_PRESENT?, gps_obtain_fix_cont1
+		; check for a rotary encoder short press
+		lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
+		jnb TRANSITION_STATE?, gps_obtain_fix_cont1
 			; if there is a GPS present, check the state of TIMEZONE_SET? bit
 			jnb TIMEZONE_SET?, gps_obtain_fix_cont2
 				; TIMEZONE has been set:
@@ -1879,27 +1937,48 @@ TIMER_0_SERVICE:
 ret
 
 TIMER_1_SERVICE:
+	push acc
+	push PSW
+
 	; Reset timer 1
 	; Initialize TL1 and TH1 for timer 1 16 bit timing for maximum count
 	mov TL1, #00h
 	mov TH1, #00h
 
-	jnb P1.3, timer_1_service_cont0					; check if GPS fix is HIGH/LOW
-		; if GPS fix is high
-		mov GPS_FIX_LPF, #14h						; if GPS fix is HIGH (i.e. no GPS fix), reload GPS_FIX_LPF with 20 (decimal)
-		djnz GPS_FIX_HIGH_TIMEOUT, timer_1_service_cont1
-			; if GPS fix stays high for ~15 seconds, assume there is no GPS connected and transition state:
-			; clr GPS_PRESENT?
-			lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
-			ljmp timer_1_service_cont1				; jump to the end of the ISR
-	timer_1_service_cont0:
-		; if GPS fix is low:
-		setb GPS_PRESENT? 							; since GPS fix went low, we know there is a GPS present
-		mov GPS_FIX_HIGH_TIMEOUT, #020h 			; re-load 32 (dec) into GPS_FIX_HIGH_TIMEOUT
-		djnz GPS_FIX_LPF, timer_1_service_cont1
-			; GPS fix has been low for more than ~1.3 seconds
-			lcall ENTER_GPS_OBTAIN_DATA_STATE
+	setb P1.1			; regardless of state, turn off the buzzer
+
+	mov a, CLOCK_STATE
+	; check if CLOCK_STATE is GPS_SYNC_STATE
+	cjne a, #GPS_SYNC_STATE, timer_1_service_cont2
+		mov a, GPS_SYNC_SUB_STATE
+		; check if GPS_SYNC_SUB_STATE is GPS_OBTAIN_FIX_STATE
+		cjne a, #GPS_OBTAIN_FIX_STATE, timer_1_service_cont2
+			jnb P1.3, timer_1_service_cont0					; check if GPS fix is HIGH/LOW
+				; if GPS fix is high
+				mov GPS_FIX_LPF, #14h						; if GPS fix is HIGH (i.e. no GPS fix), reload GPS_FIX_LPF with 20 (decimal)
+				djnz GPS_FIX_HIGH_TIMEOUT, timer_1_service_cont1
+					; if GPS fix stays high for ~15 seconds, assume there is no GPS connected and transition state:
+					; clr GPS_PRESENT?
+					lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+					ljmp timer_1_service_cont1				; jump to the end of the ISR
+			timer_1_service_cont0:
+				; if GPS fix is low:
+				setb GPS_PRESENT? 							; since GPS fix went low, we know there is a GPS present
+				mov GPS_FIX_HIGH_TIMEOUT, #020h 			; re-load 32 (dec) into GPS_FIX_HIGH_TIMEOUT
+				djnz GPS_FIX_LPF, timer_1_service_cont1
+					; GPS fix has been low for more than ~1.3 seconds
+					lcall ENTER_GPS_OBTAIN_DATA_STATE
+					ljmp timer_1_service_cont1
+
+	timer_1_service_cont2:
+		; for beep mode:
+		clr TR1 			; turn off timer 1
+		clr ET1 			; disable timer 1 overflow interrupt
+
 	timer_1_service_cont1:
+
+	pop PSW
+	pop acc
 ret
 
 SERIAL_SERVICE:
@@ -2203,7 +2282,8 @@ CHECK_FOR_ROT_ENC_SHORT_PRESS:
 	jb BUTTON_FLAG, check_short_press_cont1			; check to make sure BUTTON_FLAG is cleared
 		jb P3.6, check_short_press_cont1			; check if rotary encoder button is pressed
 			; mov R2, #28h							; load R2 for 40 counts
-			mov R2, #14h							; load R2 for 20 counts
+			;mov R2, #14h							; load R2 for 20 counts
+			mov R2, #0Ah
 			mov R3, #0FFh							; load R3 for 255 counts
 			check_short_press_loop0:				; rotary encoder button must be depressed for ~20ms before time/date can be
 													; changed (also acts as debounce)
@@ -2213,6 +2293,7 @@ CHECK_FOR_ROT_ENC_SHORT_PRESS:
 			djnz R2, check_short_press_loop0		; count R3 down again until R2 counts down
 			setb BUTTON_FLAG						; set the BUTTON_FLAG
 			setb TRANSITION_STATE?					; set the TRANSITION_STATE? bit
+			lcall BEEP 								; beep
 	check_short_press_cont1:
 ret
 
@@ -2227,14 +2308,16 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 
 	jb BUTTON_FLAG, cont15					; check to make sure BUTTON_FLAG is cleared
 		jb P3.6, cont15						; check if rotary encoder button is pressed
-			mov R2, #0FFh					; load R2 for 255 counts
+			; mov R2, #0FFh					; load R2 for 255 counts
+			mov R2, #0B0h					; load R2 for 255 counts
 			mov R3, #0FFh					; load R3 for 255 counts
 			loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed
 											; (also acts as debounce)
 				jb P3.6, cont15				; check if rotary encoder button is still pressed
 				djnz R3, loop3				; decrement count in R3
 			mov R3, #0FFh					; reload R3 in case loop is needed again
-			cjne R2, #0E1h, cont16			; check if R2 has been decrement enough for a "short press"
+			; cjne R2, #0E1h, cont16			; check if R2 has been decrement enough for a "short press"
+			cjne R2, #0A6h, cont16			; check if R2 has been decrement enough for a "short press"
 
 				mov a, ALARM_STATE 										; check if alarm is firing
 				cjne a, #ALARM_FIRING_STATE, cont20
@@ -2242,14 +2325,17 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 					lcall ALARM_FIRING_STATE_TO_ALARM_SNOOZING_STATE 	; snooze the alarm
 					ljmp cont19 			; jump to end and set BUTTON_FLAG
 				cont20: 					; alarm is not firing, so interpret rotary encoder activity for CLOCK_STATE transitions
+				
 				; if there has been a rot enc short press, determine next state based on current state
 				mov a, CLOCK_STATE 					; move the CLOCK_STATE into the accumulator
 				cjne a, #SHOW_TIME_STATE, cont17
 					; if CLOCK_STATE = SHOW_TIME_STATE:
+					lcall BEEP
 					mov NEXT_CLOCK_STATE, #SHOW_ALARM_STATE
 					ljmp cont16
 				cont17:
 				; only other possibility is that we are in SHOW_ALARM_STATE
+				lcall BEEP
 				mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE		
 			cont16:
 			djnz R2, loop3					; count R3 down again until R2 counts down
@@ -2276,7 +2362,8 @@ CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS:
 
 	jb SETTINGS_BUTTON_FLAG, check_settings_short_press_cont1	; check to make sure SETTINGS_BUTTON_FLAG is cleared
 		jb P3.7, check_settings_short_press_cont1				; check if settings button is pressed
-			mov R2, #14h										; load R2 for 20 counts
+			;mov R2, #14h										; load R2 for 20 counts
+			mov R2, #0Ah
 			mov R3, #0FFh										; load R3 for 255 counts
 			check_settings_short_press_loop0:					; settings button must be depressed for ~20ms before settings sub-state can be
 																; changed (also acts as debounce)
@@ -2286,6 +2373,7 @@ CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS:
 			djnz R2, check_settings_short_press_loop0			; count R3 down again until R2 counts down
 			setb SETTINGS_BUTTON_FLAG							; set the SETTINGS_BUTTON_FLAG
 			setb TRANSITION_STATE?								; set the TRANSITION_STATE? bit
+			lcall BEEP
 	check_settings_short_press_cont1:
 ret
 
@@ -2521,13 +2609,24 @@ GPS_SYNC_STATE_TO_SHOW_TIME_STATE:
 	; disable the GPS 	
 	clr P1.2
 
+	clr EX0						; disable external interrupt 0
+	clr EX1						; disable external interrupt 1
+
 	; == This is how to configure timers going into GPS_SET_TIMEZONE_STATE:
 	; [x] Timer 0 keeps track of time (for timeout) and decatron flashes
 	; [x] Timer 1 not used
 	; [x] Timer 2 does update displays
-	; Disable timer 1
-	clr TR1 				; stop timer 1
-	clr ET1					; disable timer 1 overflow Interrupt
+	; Timer 0 (for seconds interrupt) & 1 (for beep) interrupt initialization
+	mov TMOD, #16h 			; set timer0 as a counter for the seconds (0000 0110 bin = 06 hex)
+							; set timer1 as a timer for the beep duration (0001 0000 bin = 10 hex)
+	; Disable timer 1 only if a beep is not in progress (P1.1 is low if beep is in progress)
+	; jnb P1.1, gps_sync_state_to_show_time_state_cont0
+	jb BEEP_ON?, gps_sync_state_to_show_time_state_cont0
+		clr TR1 				; stop timer 1
+		; clr ET1								; disable timer 1 overflow interrupt <-- commented out and replaced with...
+	gps_sync_state_to_show_time_state_cont0:
+	setb ET1 									; ^... this line -- otherwise beep never terminates coming out of GPS_SET_TIMEZONE_STATE
+												; when there is a successful sync
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	mov SCON, #00h 			; initialize the serial port in mode 0
@@ -2557,6 +2656,9 @@ ENTER_GPS_SYNC_STATE:
 	mov TIMEOUT_LENGTH, #0FFh
 	; mov TIMEOUT_LENGTH, #0Ah
 	mov TIMEOUT, TIMEOUT_LENGTH
+
+	clr EX0						; disable external interrupt 0
+	clr EX1						; disable external interrupt 1
 
 	; ; Clear the TRANSITION_STATE? bit
 	; clr TRANSITION_STATE?
@@ -2604,8 +2706,8 @@ ENTER_GPS_SYNC_STATE:
 	; NOTE: high nibble of TMOD is for timer 1, low nibble is for timer 0
 	mov TMOD, #16h
 	; Initialize TL1 and TH1 for timer 1 16 bit timing for maximum count
-	mov TL1, #00h
-	mov TH1, #00h
+	; mov TL1, #00h
+	; mov TH1, #00h
 	; Start timer 1
 	setb TR1
 	; Initialize GPS_FIX_LPF to keep track of how many times timer 1 has counted to 65536 (for LPF of GPS fix)
@@ -2828,20 +2930,29 @@ ENTER_GPS_SET_TIMEZONE_STATE:
 	; disable the GPS
 	clr P1.2
 
-	; == This is how to configure timers going into GPS_SET_TIMEZONE_STATE:
-	; [x] Timer 0 keeps track of time (for timeout) and decatron flashes
-	; [x] Timer 1 not used
-	; [x] Timer 2 does update displays
-	; Disable timer 1
-	clr TR1 								; stop timer 1
-	clr ET1									; disable timer 1 overflow Interrupt
-
 	; Added the two lines below to see if this was the cause of flickering, but still saw flickering.
 	; Disable the serial interrupt
 	clr ES
 
 	; Serial port initialization (mode 0 - synchronous serial communication)
 	mov SCON, #00h 							; initialize the serial port in mode 0
+
+	; == This is how to configure timers going into GPS_SET_TIMEZONE_STATE:
+	; [x] Timer 0 keeps track of time (for timeout) and decatron flashes
+	; [x] Timer 1 used for beep
+	; [x] Timer 2 does update displays
+	; Timer 0 (for seconds interrupt) & 1 (for beep) interrupt initialization
+	mov TMOD, #16h 			; set timer0 as a counter for the seconds (0000 0110 bin = 06 hex)
+							; set timer1 as a timer for the beep duration (0001 0000 bin = 10 hex)
+	; Disable timer 1 only if a beep is not in progress (P1.1 is low if beep is in progress)
+	; jnb P1.1, enter_gps_set_timezone_state_cont0
+	jb BEEP_ON?, enter_gps_set_timezone_state_cont0
+		clr TR1 								; stop timer 1
+		; clr ET1								; disable timer 1 overflow interrupt <-- commented out and replaced with...
+	enter_gps_set_timezone_state_cont0:
+	setb ET1 									; ^... this line -- otherwise beep never terminates coming out of GPS_SET_TIMEZONE_STATE
+												; when there is a successful sync
+
 
 	; Move in mask values
 	mov VFD_FLASH_MASK, #1Fh 				; flash grids 1, 2, and 3
@@ -3176,6 +3287,8 @@ UPDATE_VFD:
 	; A VFD_NUM (@R1) value of #1Bh corresponds to a "u" for grids 1-8
 	; A VFD_NUM (@R1) value of #1Ch corresponds to a "H" for grids 1-8
 	; A VFD_NUM (@R1) value of #1Dh corresponds to half of a "M" for grids 1-8
+	; A VFD_NUM (@R1) value of #1Eh corresponds to a "b" for grids 1-8
+	; A VFD_NUM (@R1) value of #1Fh corresponds to a "P" for grids 1-8
 
 	push 1							; push R1 onto the stack to preserve its value
 	push acc						; push a onto the stack to preserve its value
@@ -3409,6 +3522,20 @@ UPDATE_VFD:
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
 	vfd_cont29:
 
+	; "b" numeral
+	cjne @R1, #1Eh, vfd_cont30
+		mov SBUF, #3Eh				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont30:
+
+	; "P" numeral
+	cjne @R1, #1Fh, vfd_cont31
+		mov SBUF, #0CEh				; send the third byte down the serial line
+		jnb TI, $ 					; wait for the entire byte to be sent
+		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+	vfd_cont31:
+
 	
 	setb P3.5						; load the MAX6921
 	clr P3.5						; latch the MAX6921
@@ -3421,9 +3548,9 @@ UPDATE_VFD:
 	rlc a 								; rotate the acculator left through carry (NOTE! the carry flag gest rotated into bit 0)
 	mov GRID_EN_2, a 					; move the rotated result back into GRID_EN_2
 	clr c 								; clear the carry flag
-	cjne R1, #3Ch, vfd_cont30 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
+	cjne R1, #3Ch, vfd_cont32 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
 		lcall VFD_RESET					; reset the VFD cycle
-	vfd_cont30:
+	vfd_cont32:
 
 	pop PSW
 	pop acc					; restore value of a to value before UPDATE_VFD was called
@@ -3870,6 +3997,7 @@ ENC_A:
 		ljmp enc_a_cont2
 	enc_a_cont0:
 	jb A_FLAG, enc_a_cont2
+		lcall BEEP 									; beep
 		inc @R0
 		setb ROT_FLAG								; set the rotation flag
 		; lcall ADJUST_TIMEOUT 						; adjust any timeouts that may be active
@@ -3912,6 +4040,7 @@ ENC_B:
 		ljmp enc_b_cont2
 	enc_b_cont0:
 	jb B_FLAG, enc_b_cont2
+		lcall BEEP 									; beep
 		dec @R0
 		setb ROT_FLAG								; set the rotation flag
 		; lcall ADJUST_TIMEOUT 						; adjust any timeouts that may be active
@@ -4435,6 +4564,18 @@ DECREMENT_DAY:
 	pop PSW
 	pop b
 	pop acc
+ret
+
+BEEP:
+	; check if beep is activated
+	jnb BEEP_ON?, beep_cont0
+		mov TL1, #00h 			; initialize TL1 for max count (16 bits)
+		; mov TH1, #80h 			; initialize TH1 for max count (16 bits)
+		mov TH1, #0E0h 			; initialize TH1 for max count (16 bits)
+		setb ET1 				; enable timer 1 overflow interrupt
+		setb TR1 				; start timer 1
+		clr P1.1 				; turn on the buzzer 
+	beep_cont0:
 ret
 
 SHORT_DELAY:
