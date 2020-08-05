@@ -2573,7 +2573,7 @@ SETTINGS_STATE_TO_SHOW_TIME_STATE:
 	clr EX1						; disable external interrupt 1
 
 	; Update DECA_STATE
-	; lcall ENTER_DECA_COUNTING_SECONDS_STATE
+	lcall ENTER_DECA_FILL_UP_STATE
 
 	; Turn off the VFD if DATE_ON? is not set
 	jb DATE_ON?, settings_state_to_show_time_state_cont0
@@ -2634,8 +2634,7 @@ SHOW_TIME_STATE_TO_SETTINGS_STATE:
 	clr P1.0
 
 	; Update DECA_STATE
-	; lcall ENTER_DECA_SCROLLING_STATE
-
+	lcall ENTER_DECA_SCROLLING_STATE
 
 	; Update CLOCK_STATE
 	mov CLOCK_STATE, #SETTINGS_STATE
@@ -3069,8 +3068,8 @@ EXIT_SETTINGS_SET_TIMEZONE_STATE:
 	; Update SETTINGS_SUB_STATE
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
 
-	; update DECA_STATE
-	lcall ENTER_DECA_COUNTING_SECONDS_STATE 	; TODO:  this may change to scrolling
+	; Update DECA_STATE
+	lcall ENTER_DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
 	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
@@ -3107,8 +3106,8 @@ EXIT_SETTINGS_SET_SNOOZE_STATE:
 	; Update SETTINGS_SUB_STATE
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_SNOOZE_STATE
 
-	; update DECA_STATE
-	lcall ENTER_DECA_COUNTING_SECONDS_STATE 	; TODO:  this may change to scrolling
+	; Update DECA_STATE
+	lcall ENTER_DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
 	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
@@ -3154,8 +3153,8 @@ EXIT_SETTINGS_SET_GPS_SYNC_TIME_STATE:
 	; Update SETTINGS_SUB_STATE
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_GPS_SYNC_TIME_STATE
 
-	; update DECA_STATE
-	lcall ENTER_DECA_COUNTING_SECONDS_STATE 	; TODO:  this may change to scrolling
+	; Update DECA_STATE
+	lcall ENTER_DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
 	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
@@ -3887,6 +3886,33 @@ DECA_FAST:
 ret
 
 DECA_SCROLLING:
+	; determine value to load into DECATRON based on number of settings items and current index
+	; look up NUMBER_OF_ACTIVE_SETTINGS to pick the address of which lookup table to use in the data pointer (DPTR)
+	mov a, NUMBER_OF_ACTIVE_SETTINGS
+
+	cjne a, #08h, deca_scrolling_cont0
+		; NUMBER_OF_ACTIVE_SETTINGS is 8
+		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_8_SETTINGS    	; DPTR points to the start of the lookup table
+		sjmp deca_scrolling_cont1
+
+	deca_scrolling_cont0:
+	cjne a, #07h, deca_scrolling_cont2
+		; NUMBER_OF_ACTIVE_SETTINGS is 7
+		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_7_SETTINGS    	; DPTR points to the start of the lookup table
+		sjmp deca_scrolling_cont1
+
+	deca_scrolling_cont2:
+		; NUMBER_OF_ACTIVE_SETTINGS is 5
+		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_5_SETTINGS    	; DPTR points to the start of the lookup table
+
+	deca_scrolling_cont1:
+	mov a, SETTINGS_SUB_STATE           					; SETTINGS_SUB_STATE is the offset from the start of the lookup table
+	dec a 													; decrement a such that lookup table offset is right (NOTE: lookup tables loads
+															; (a+1)th item in lookup table)
+	movc a, @a + DPTR   									; moves the (a+1)th lookup table item into the accumulator
+	mov DECATRON, a											; accumulator should now hold how many decatron pins to light up
+
+	lcall DECA_LOAD
 ret
 
 DECA_RADAR:
@@ -3965,7 +3991,7 @@ ENTER_DECA_FAST_STATE:
 ret
 
 ENTER_DECA_SCROLLING_STATE:
-	; start empty?
+	mov DECATRON, #00h 									; start with the decatron empty
 	mov DECA_STATE, #DECA_SCROLLING_STATE 				; update decatron state variable
 ret
 
@@ -4659,6 +4685,24 @@ LONG_DELAY:
 
 	pop 1
 	pop 0
+ret
+
+DECA_SCROLL_LOOKUP_TABLE_5_SETTINGS:
+	; Lookup table to fill up decatron for five settings menu items -- used in DECA_SCROLLING_STATE.
+	; These numbers give evenly-spaced decatron pin settings for five increments.
+	db 6d, 12d, 18d, 24d, 30d 						; numbers in decimal
+ret
+
+DECA_SCROLL_LOOKUP_TABLE_7_SETTINGS:
+	; Lookup table to fill up decatron for seven settings menu items -- used in DECA_SCROLLING_STATE.
+	; These numbers give (roughly) evenly-spaced decatron pin settings for seven increments.
+	db 5d, 9d, 13d, 18d, 22d, 26d, 30d 				; numbers in decimal
+ret
+
+DECA_SCROLL_LOOKUP_TABLE_8_SETTINGS:
+	; Lookup table to fill up decatron for eight settings menu items -- used in DECA_SCROLLING_STATE.
+	; These numbers give (roughly) evenly-spaced decatron pin settings for eight increments.
+	db 4d, 8d, 11d, 15d, 19d, 23d, 26d, 30d 		; numbers in decimal
 ret
 
 
