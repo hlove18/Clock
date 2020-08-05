@@ -106,17 +106,17 @@ INIT:
 	; Settings Sub-State Variable:
 	.equ SETTINGS_SUB_STATE, 6Ch
 
-	SETTINGS_SHOW_RE_SYNC_STATE 			equ 1
-	SETTINGS_SHOW_TIMEZONE_STATE 			equ 2
+	SETTINGS_SHOW_DATE_ON_OFF_STATE 		equ 1
+	SETTINGS_SHOW_SNOOZE_STATE 				equ 2
+	SETTINGS_SHOW_BEEP_ON_OFF_STATE			equ 3
+	SETTINGS_SHOW_12_OR_24_HR_MODE_STATE	equ 4
+	SETTINGS_SHOW_RE_SYNC_STATE 			equ 5
 
-	SETTINGS_SHOW_SNOOZE_STATE 				equ 3
-	SETTINGS_SHOW_DATE_ON_OFF_STATE 		equ 4
+	SETTINGS_SHOW_TIMEZONE_STATE 			equ 6
+	SETTINGS_SHOW_AUTO_SYNC_STATE 			equ 7
 
-	SETTINGS_SHOW_GPS_SYNC_TIME_STATE 		equ 5
-	SETTINGS_SHOW_AUTO_SYNC_STATE 			equ 6
+	SETTINGS_SHOW_GPS_SYNC_TIME_STATE 		equ 8
 
-	SETTINGS_SHOW_12_OR_24_HR_MODE_STATE	equ 7
-	SETTINGS_SHOW_BEEP_ON_OFF_STATE			equ 8
 
 	SETTINGS_SET_TIMEZONE_STATE       		equ 11
 	SETTINGS_SET_SNOOZE_STATE         		equ 12
@@ -124,7 +124,11 @@ INIT:
 	SETTINGS_SET_GPS_SYNC_MIN_STATE   		equ 14
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
 
-	NUMBER_OF_SETTINGS equ 8 	; update this if adding more or taking out settings
+
+	.equ NUMBER_OF_ACTIVE_SETTINGS, 6Ah
+	mov NUMBER_OF_ACTIVE_SETTINGS, #04h 		; assume for now there is no GPS present
+
+	NUMBER_OF_SETTINGS equ 8 					; total number of settings; update this if adding more or taking out settings
 
 	; Timezone setting
 	TIMEZONE_MAX equ 28 						; this corresponds to UTC+14
@@ -1294,6 +1298,20 @@ SETTINGS_SHOW_AUTO_SYNC:
 	lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
 	jnb TRANSITION_STATE?, settings_show_auto_sync_cont2
 		cpl AUTO_SYNC? 	 		; if there was a short press (TRANSITION_STATE? bit is set), toggle AUTO_SYNC? bit
+
+		; change available settings menu options
+		jb AUTO_SYNC?, settings_show_auto_sync_cont4
+			; auto-sync was just disabled
+			mov NUMBER_OF_ACTIVE_SETTINGS, #07h 				; hide the auto-sync time menu option
+			mov UPPER_BOUND, NUMBER_OF_ACTIVE_SETTINGS 			; update the rotary encoder upper bound:  SETTINGS_SUB_STATE can be 
+																; NUMBER_OF_ACTIVE_SETTINGS max
+			sjmp settings_show_auto_sync_cont3
+
+		settings_show_auto_sync_cont4:
+		; auto-sync was just enabled
+		mov NUMBER_OF_ACTIVE_SETTINGS, #NUMBER_OF_SETTINGS 		; make all settings menu options available
+		mov UPPER_BOUND, NUMBER_OF_ACTIVE_SETTINGS 				; update the rotary encoder upper bound:  SETTINGS_SUB_STATE can be...
+																; NUMBER_OF_ACTIVE_SETTINGS max
 		ljmp settings_show_auto_sync_cont3
 	settings_show_auto_sync_cont2:
 
@@ -1953,18 +1971,18 @@ TIMER_1_SERVICE:
 		mov a, GPS_SYNC_SUB_STATE
 		; check if GPS_SYNC_SUB_STATE is GPS_OBTAIN_FIX_STATE
 		cjne a, #GPS_OBTAIN_FIX_STATE, timer_1_service_cont2
-			jnb P1.3, timer_1_service_cont0					; check if GPS fix is HIGH/LOW
+			jnb P1.3, timer_1_service_cont0							; check if GPS fix is HIGH/LOW
 				; if GPS fix is high
-				mov GPS_FIX_LPF, #14h						; if GPS fix is HIGH (i.e. no GPS fix), reload GPS_FIX_LPF with 20 (decimal)
+				mov GPS_FIX_LPF, #14h								; if GPS fix is HIGH (i.e. no GPS fix), reload GPS_FIX_LPF with 20 (decimal)
 				djnz GPS_FIX_HIGH_TIMEOUT, timer_1_service_cont1
-					; if GPS fix stays high for ~15 seconds, assume there is no GPS connected and transition state:
-					; clr GPS_PRESENT?
+					; if GPS fix stays high for ~2.5 seconds, assume there is no GPS connected and transition state:
+					clr GPS_PRESENT?
 					lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
-					ljmp timer_1_service_cont1				; jump to the end of the ISR
+					ljmp timer_1_service_cont1						; jump to the end of the ISR
 			timer_1_service_cont0:
 				; if GPS fix is low:
-				setb GPS_PRESENT? 							; since GPS fix went low, we know there is a GPS present
-				mov GPS_FIX_HIGH_TIMEOUT, #020h 			; re-load 32 (dec) into GPS_FIX_HIGH_TIMEOUT
+				setb GPS_PRESENT? 									; since GPS fix went low, we know there is a GPS present
+				mov GPS_FIX_HIGH_TIMEOUT, #020h 					; re-load 32 (dec) into GPS_FIX_HIGH_TIMEOUT
 				djnz GPS_FIX_LPF, timer_1_service_cont1
 					; GPS fix has been low for more than ~1.3 seconds
 					lcall ENTER_GPS_OBTAIN_DATA_STATE
@@ -2580,8 +2598,26 @@ SHOW_TIME_STATE_TO_SETTINGS_STATE:
 	setb EX0						; enable external interrupt 0
 	setb EX1						; enable external interrupt 1
 
+	; Configure settings menu options based on GPS present and/or auto-sync enabled
+	jb GPS_PRESENT?, show_time_state_to_settings_state_cont0 	; check if GPS is present
+		; GPS is not present
+		mov NUMBER_OF_ACTIVE_SETTINGS, #05h 					; hide all GPS-related settings if no GPS is present
+		sjmp show_time_state_to_settings_state_cont2
+	show_time_state_to_settings_state_cont0:
+	; GPS is present
+	jb AUTO_SYNC?, show_time_state_to_settings_state_cont1 		; check if GPS auto-sync is enabled
+		; GPS is present but auto-sync is disabled
+		mov NUMBER_OF_ACTIVE_SETTINGS, #07h 					; hide the auto-sync time setting
+		sjmp show_time_state_to_settings_state_cont2
+
+	show_time_state_to_settings_state_cont1:
+	; GPS is present and auto-sync is enabled
+	mov NUMBER_OF_ACTIVE_SETTINGS, #NUMBER_OF_SETTINGS 			; show all GPS-related settings
+
+	show_time_state_to_settings_state_cont2:
+
 	; Update SETTINGS_SUB_STATE
-	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_RE_SYNC_STATE
+	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_DATE_ON_OFF_STATE 	; Note:  this should correspond with the expected first settings menu item
 
 	clr ROT_FLAG					; clear the ROT_FLAG
 
@@ -2589,8 +2625,8 @@ SHOW_TIME_STATE_TO_SETTINGS_STATE:
 	; clr TRANSITION_STATE?
 
 	; Set the upper and lower bounds
-	mov UPPER_BOUND, #NUMBER_OF_SETTINGS 	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
-	mov LOWER_BOUND, #01h 					; SETTINGS_SUB_STATE can be 1 min
+	mov UPPER_BOUND, NUMBER_OF_ACTIVE_SETTINGS 	; SETTINGS_SUB_STATE can be NUMBER_OF_ACTIVE_SETTINGS max
+	mov LOWER_BOUND, #01h 						; SETTINGS_SUB_STATE can be 1 min
 
 	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
 
@@ -2712,6 +2748,9 @@ ENTER_GPS_SYNC_STATE:
 	setb TR1
 	; Initialize GPS_FIX_LPF to keep track of how many times timer 1 has counted to 65536 (for LPF of GPS fix)
 	mov GPS_FIX_LPF, #14h	; move 20 (decimal) into GPS_FIX_LPF (20 * 0.065536 seconds = ~1.31 seconds)
+
+	; Reset timeout for if there is no GPS
+	mov GPS_FIX_HIGH_TIMEOUT, #020h 					; re-load 32 (dec) into GPS_FIX_HIGH_TIMEOUT
 
 	; turn off GPS sync indicator
 	clr P1.7
