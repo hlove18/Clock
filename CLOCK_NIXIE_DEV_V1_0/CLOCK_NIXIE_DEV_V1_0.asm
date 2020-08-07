@@ -362,6 +362,7 @@ INIT:
 	.equ DECA_RESET_CALLED?, 	20h.1
 	.equ DECA_IN_TRANSITION?, 	20h.2
 	.equ TO_COUNTDOWN?, 		20h.3
+	.equ TO_SCROLLING?, 		20h.4
 
 	; Fill in with values
 	mov DECATRON, #00h
@@ -370,6 +371,7 @@ INIT:
 	clr DECA_RESET_CALLED?
 	clr DECA_IN_TRANSITION?
 	clr TO_COUNTDOWN?
+	clr TO_SCROLLING?
 	; ===============================
 
 	; ====== Rotary Encoder Variables ======
@@ -1103,7 +1105,7 @@ ret
 
 SETTINGS_SHOW_TIMEZONE:
 	; Have VFD display "Utc Zone"
-	mov GRID9, #0FFh    ; BLANK
+	mov GRID9, #0Bh     ; "*" since this has a sub-menu
 	mov GRID8, #12h	    ; "U"
 	mov GRID7, #13h		; "t"
 	mov GRID6, #14h 	; "c"
@@ -1146,7 +1148,7 @@ ret
 
 SETTINGS_SHOW_SNOOZE:
 	; Have VFD display "SnooZe"
-	mov GRID9, #0FFh    ; BLANK
+	mov GRID9, #0Bh     ; "*" since this has a sub-menu
 	mov GRID8, #0FFh	; BLANK
 	mov GRID7, #0FFh	; BLANK
 	mov GRID6, #15h 	; "S"
@@ -1225,7 +1227,7 @@ ret
 
 SETTINGS_SHOW_GPS_SYNC_TIME:
 	; Have VFD display "Sync at"
-	mov GRID9, #0FFh    ; BLANK
+	mov GRID9, #0Bh     ; "*" since this has a sub-menu
 	mov GRID8, #0FFh	; BLANK
 	mov GRID7, #15h		; "S"
 	mov GRID6, #1Ah 	; "y"
@@ -1827,19 +1829,52 @@ TIMER_0_SERVICE:
 	; Check if DECA_STATE = DECA_FILL_UP_STATE
 	mov a, DECA_STATE
 	cjne a, #DECA_FILL_UP_STATE, timer_0_service_cont4
+		; check if transition is into DECA_SCROLLING_STATE
+		jb TO_SCROLLING?, timer_0_service_cont15
+			; transition is into DECA_COUNTING_SECONDS_STATE
+			mov a, SECONDS 										; check if finished with the transition (DECATRON = SECONDS)
+			cjne a, DECATRON, timer_0_service_cont5 			; check if decatron is displaying current seconds
+				lcall ENTER_DECA_COUNTING_SECONDS_STATE 		; transition to DECA_COUNTING_SECONDS_STATE
+				clr DECA_IN_TRANSITION? 						; clear the transition bit
+				ljmp timer_0_service_cont5
+
+		timer_0_service_cont15:
+			; transition is into DECA_SCROLLING_STATE
+			; check if finished with the transition (DECATRON = number of pins to light up in this menu)
+			mov a, NUMBER_OF_ACTIVE_SETTINGS
+
+			cjne a, #08h, timer_0_service_cont20
+				; NUMBER_OF_ACTIVE_SETTINGS is 8
+				mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_8_SETTINGS    	; DPTR points to the start of the lookup table
+				sjmp timer_0_service_cont21
+
+			timer_0_service_cont20:
+			cjne a, #07h, timer_0_service_cont22
+				; NUMBER_OF_ACTIVE_SETTINGS is 7
+				mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_7_SETTINGS    	; DPTR points to the start of the lookup table
+				sjmp timer_0_service_cont21
+
+			timer_0_service_cont22:
+				; NUMBER_OF_ACTIVE_SETTINGS is 5
+				mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_5_SETTINGS    	; DPTR points to the start of the lookup table
+
+			timer_0_service_cont21:
+			mov a, SETTINGS_SUB_STATE           					; SETTINGS_SUB_STATE is the offset from the start of the lookup table
+			dec a 													; decrement a such that lookup table offset is right (NOTE: lookup tables
+																	; load (a+1)th item in lookup table)
+			movc a, @a + DPTR   									; moves the (a+1)th lookup table item into the accumulator
+			cjne a, DECATRON, timer_0_service_cont5 				; check if decatron is displaying the number of pins for this menu item
+				lcall ENTER_DECA_SCROLLING_STATE 					; transition to DECA_SCROLLING_STATE
+				clr DECA_IN_TRANSITION? 							; clear the transition bit
+				clr TO_SCROLLING? 									; clear the transition to scrolling bit
+
+		timer_0_service_cont5:
 		; if DECA_STATE is DECA_FILL_UP_STATE, increment DECATRON with every 30Hz interrupt
 		inc DECATRON
 		; it is possible for DECATRON to wrap around 60 before it matches SECONDS, so roll over DECATRON if needed
 		mov a, DECATRON
-		cjne a, #3Ch, timer_0_service_cont5 					; check if DECATRON = 60 (dec)
+		cjne a, #3Ch, timer_0_service_cont4 					; check if DECATRON = 60 (dec)
 			mov DECATRON, #00h 									; move 0 into DECATRON
-		timer_0_service_cont5:
-
-		; check if finished with the transition (DECATRON = SECONDS)
-		mov a, SECONDS
-		cjne a, DECATRON, timer_0_service_cont4 			; check if decatron is displaying current seconds
-			lcall ENTER_DECA_COUNTING_SECONDS_STATE 		; transition to DECA_COUNTING_SECONDS_STATE
-			clr DECA_IN_TRANSITION? 						; clear the transition bit
 
 	timer_0_service_cont4:
 
@@ -1847,31 +1882,62 @@ TIMER_0_SERVICE:
 	; Check if DECA_STATE = DECA_FAST_STATE
 	mov a, DECA_STATE
 	cjne a, #DECA_FAST_STATE, timer_0_service_cont7
-		; if DECA_STATE is DECA_FAST_STATE, increment DECATRON with every 60Hz interrupt
-		inc DECATRON
-		; check if we need to wrap DECATRON around 60
-		mov a, DECATRON
-		cjne a, #3Ch, timer_0_service_cont6 					; check if DECATRON = 60 (dec)
-			mov DECATRON, #00h 									; move 0 into DECATRON
-		timer_0_service_cont6:
-
 		; check if transitioning
-		jnb DECA_IN_TRANSITION?, timer_0_service_cont7
+		jnb DECA_IN_TRANSITION?, timer_0_service_cont6
 			jb TO_COUNTDOWN?, timer_0_service_cont10 				; check if transition is into DECA_COUNTING_SECONDS_STATE
-				; check if finished with the transition (DECATRON = SECONDS)
-				mov a, SECONDS
-				cjne a, DECATRON, timer_0_service_cont7 			; check if decatron is displaying current seconds
-					lcall ENTER_DECA_COUNTING_SECONDS_STATE 		; transition to DECA_COUNTING_SECONDS_STATE
-					clr DECA_IN_TRANSITION? 						; clear the transition bit
-					sjmp timer_0_service_cont7
+				; jb TO_SCROLLING?, timer_0_service_cont15 			; check if transition is into DECA_SCROLLING_STATE
+					; check if finished with the transition (DECATRON = SECONDS)
+					mov a, SECONDS
+					cjne a, DECATRON, timer_0_service_cont6 		; check if decatron is displaying current seconds
+						lcall ENTER_DECA_COUNTING_SECONDS_STATE 	; transition to DECA_COUNTING_SECONDS_STATE
+						clr DECA_IN_TRANSITION? 					; clear the transition bit
+						ljmp timer_0_service_cont6
 
 			timer_0_service_cont10: 								; transition is into DECA_COUNTDOWN_STATE
 				; check if finished with the transition (DECATRON = 30 dec)
 				mov a, #1Eh
-				cjne a, DECATRON, timer_0_service_cont7 			; check if decatron is displaying current seconds
+				cjne a, DECATRON, timer_0_service_cont6 			; check if decatron is displaying current seconds
 					lcall ENTER_DECA_COUNTDOWN_STATE 				; transition to DECA_COUNTDOWN_STATE
 					clr DECA_IN_TRANSITION? 						; clear the transition bit
 					clr TO_COUNTDOWN? 								; clear the transition to countdown bit
+					ljmp timer_0_service_cont6
+
+			; timer_0_service_cont15: 								; transition is into DECA_SCROLLING_STATE
+			; 	; check if finished with the transition (DECATRON = number of pins to light up in this menu)
+			; 	mov a, NUMBER_OF_ACTIVE_SETTINGS
+
+			; 	cjne a, #08h, timer_0_service_cont20
+			; 		; NUMBER_OF_ACTIVE_SETTINGS is 8
+			; 		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_8_SETTINGS    	; DPTR points to the start of the lookup table
+			; 		sjmp timer_0_service_cont21
+
+			; 	timer_0_service_cont20:
+			; 	cjne a, #07h, timer_0_service_cont22
+			; 		; NUMBER_OF_ACTIVE_SETTINGS is 7
+			; 		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_7_SETTINGS    	; DPTR points to the start of the lookup table
+			; 		sjmp timer_0_service_cont21
+
+			; 	timer_0_service_cont22:
+			; 		; NUMBER_OF_ACTIVE_SETTINGS is 5
+			; 		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_5_SETTINGS    	; DPTR points to the start of the lookup table
+
+			; 	timer_0_service_cont21:
+			; 	mov a, SETTINGS_SUB_STATE           					; SETTINGS_SUB_STATE is the offset from the start of the lookup table
+			; 	dec a 													; decrement a such that lookup table offset is right (NOTE: lookup tables
+			; 															; load (a+1)th item in lookup table)
+			; 	movc a, @a + DPTR   									; moves the (a+1)th lookup table item into the accumulator
+			; 	cjne a, DECATRON, timer_0_service_cont6 				; check if decatron is displaying the number of pins for this menu item
+			; 		lcall ENTER_DECA_SCROLLING_STATE 					; transition to DECA_SCROLLING_STATE
+			; 		clr DECA_IN_TRANSITION? 							; clear the transition bit
+			; 		clr TO_SCROLLING? 									; clear the transition to scrolling bit
+
+		timer_0_service_cont6:
+		; if DECA_STATE is DECA_FAST_STATE, increment DECATRON with every 60Hz interrupt
+		inc DECATRON
+		; check if we need to wrap DECATRON around 60
+		mov a, DECATRON
+		cjne a, #3Ch, timer_0_service_cont7 					; check if DECATRON = 60 (dec)
+			mov DECATRON, #00h 									; move 0 into DECATRON
 
 	timer_0_service_cont7:
 
@@ -2563,6 +2629,7 @@ ret
 
 SETTINGS_STATE_TO_SHOW_TIME_STATE:
 	; Display "-" in grids 3 & 6
+	mov GRID9, #0FFh 	; blank grid 9
 	mov GRID6, #0Ah 	; write dash to grid 6 for date
 	mov GRID3, #0Ah 	; write dash to grid 3 for date
 
@@ -2619,7 +2686,7 @@ SHOW_TIME_STATE_TO_SETTINGS_STATE:
 	; Update SETTINGS_SUB_STATE
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_DATE_ON_OFF_STATE 	; Note:  this should correspond with the expected first settings menu item
 
-	clr ROT_FLAG					; clear the ROT_FLAG
+	clr ROT_FLAG								; clear the ROT_FLAG
 
 	; ; Clear the TRANSITION_STATE? bit
 	; clr TRANSITION_STATE?
@@ -2628,13 +2695,16 @@ SHOW_TIME_STATE_TO_SETTINGS_STATE:
 	mov UPPER_BOUND, NUMBER_OF_ACTIVE_SETTINGS 	; SETTINGS_SUB_STATE can be NUMBER_OF_ACTIVE_SETTINGS max
 	mov LOWER_BOUND, #01h 						; SETTINGS_SUB_STATE can be 1 min
 
-	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
+	mov R0, #6Ch								; corresponds to memory address of SETTINGS_SUB_STATE
 
 	; turn on the VFD (always on when not in SHOW_TIME or GPS_SYNC)
 	clr P1.0
 
 	; Update DECA_STATE
-	lcall ENTER_DECA_SCROLLING_STATE
+	; lcall ENTER_DECA_SCROLLING_STATE
+	setb TO_SCROLLING? 							; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FILL_UP_STATE 				; go into DECA_FILL_UP_STATE as transition to DECA_SCROLLING_STATE
+	; setb DECA_IN_TRANSITION? 					; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Update CLOCK_STATE
 	mov CLOCK_STATE, #SETTINGS_STATE
@@ -3040,7 +3110,7 @@ ENTER_SETTINGS_SET_TIMEZONE_STATE:
 	mov NIX_FLASH_MASK, #0FFh
 
 	; Display "Utc" on the VFD
-	; mov GRID9, #0FFh 						; blank grid 9       		<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
+	; mov GRID9, #0Bh 						; display '*' on grid 9		<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
 	; mov GRID8, #12h 						; display 'U' on grid 8		<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
 	; mov GRID7, #13h 						; display 't' on grid 7		<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
 	; mov GRID6, #14h 						; display 'c' on grid 6		<-- already done in SETTINGS_SHOW_TIMEZONE_STATE
@@ -3069,7 +3139,10 @@ EXIT_SETTINGS_SET_TIMEZONE_STATE:
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_TIMEZONE_STATE
 
 	; Update DECA_STATE
-	lcall ENTER_DECA_SCROLLING_STATE
+	; lcall ENTER_DECA_SCROLLING_STATE
+	setb TO_SCROLLING? 							; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FILL_UP_STATE 			; go into DECA_FILL_UP_STATE as transition to DECA_SCROLLING_STATE
+	; setb DECA_IN_TRANSITION? 				; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
 	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
@@ -3107,7 +3180,10 @@ EXIT_SETTINGS_SET_SNOOZE_STATE:
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_SNOOZE_STATE
 
 	; Update DECA_STATE
-	lcall ENTER_DECA_SCROLLING_STATE
+	; lcall ENTER_DECA_SCROLLING_STATE
+	setb TO_SCROLLING? 							; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FILL_UP_STATE 			; go into DECA_FILL_UP_STATE as transition to DECA_SCROLLING_STATE
+	; setb DECA_IN_TRANSITION? 				; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
 	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
@@ -3154,7 +3230,10 @@ EXIT_SETTINGS_SET_GPS_SYNC_TIME_STATE:
 	mov SETTINGS_SUB_STATE, #SETTINGS_SHOW_GPS_SYNC_TIME_STATE
 
 	; Update DECA_STATE
-	lcall ENTER_DECA_SCROLLING_STATE
+	; lcall ENTER_DECA_SCROLLING_STATE
+	setb TO_SCROLLING? 						; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FILL_UP_STATE 			; go into DECA_FILL_UP_STATE as transition to DECA_SCROLLING_STATE
+	; setb DECA_IN_TRANSITION? 				; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
 	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
@@ -3355,6 +3434,7 @@ UPDATE_VFD:
 		mov SBUF, #0FCh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont0:
 
 	; "1" numeral
@@ -3362,6 +3442,7 @@ UPDATE_VFD:
 		mov SBUF, #060h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont1:
 
 	; "2" numeral
@@ -3369,6 +3450,7 @@ UPDATE_VFD:
 		mov SBUF, #0DAh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont2:
 
 	; "3" numeral
@@ -3376,6 +3458,7 @@ UPDATE_VFD:
 		mov SBUF, #0F2h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont3:
 
 	; "4" numeral
@@ -3383,6 +3466,7 @@ UPDATE_VFD:
 		mov SBUF, #66h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont4:
 
 	; "5" numeral
@@ -3390,6 +3474,7 @@ UPDATE_VFD:
 		mov SBUF, #0B6h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont5:
 
 	; "6" numeral
@@ -3397,6 +3482,7 @@ UPDATE_VFD:
 		mov SBUF, #0BEh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont6:
 
 	; "7" numeral
@@ -3404,6 +3490,7 @@ UPDATE_VFD:
 		mov SBUF, #0E0h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont7:
 
 	; "8" numeral
@@ -3411,6 +3498,7 @@ UPDATE_VFD:
 		mov SBUF, #0FEh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont8:
 
 	; "9" numeral
@@ -3418,6 +3506,7 @@ UPDATE_VFD:
 		mov SBUF, #0E6h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont9:
 
 	; "-" numeral
@@ -3425,6 +3514,7 @@ UPDATE_VFD:
 		mov SBUF, #02h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont10:
 
 	; "*" numeral
@@ -3432,6 +3522,7 @@ UPDATE_VFD:
 		mov SBUF, #01h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont11:
 
 	; "BLANK" numeral
@@ -3439,6 +3530,7 @@ UPDATE_VFD:
 		mov SBUF, #00h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont12:
 
 	; "A" numeral
@@ -3446,6 +3538,7 @@ UPDATE_VFD:
 		mov SBUF, #0EEh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont13:
 
 	; "L" numeral
@@ -3453,6 +3546,7 @@ UPDATE_VFD:
 		mov SBUF, #1Ch				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont14:
 
 	; "a" numeral
@@ -3460,6 +3554,7 @@ UPDATE_VFD:
 		mov SBUF, #0FAh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont15:
 
 	; "r" numeral
@@ -3467,6 +3562,7 @@ UPDATE_VFD:
 		mov SBUF, #0Ah				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont16:
 
 	; "n" numeral
@@ -3474,6 +3570,7 @@ UPDATE_VFD:
 		mov SBUF, #2Ah				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont17:
 
 	; "U" numeral
@@ -3481,6 +3578,7 @@ UPDATE_VFD:
 		mov SBUF, #7Ch				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont18:
 
 	; "t" numeral
@@ -3488,6 +3586,7 @@ UPDATE_VFD:
 		mov SBUF, #1Eh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont19:
 
 	; "c" numeral
@@ -3495,6 +3594,7 @@ UPDATE_VFD:
 		mov SBUF, #1Ah				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont20:
 
 	; "S" numeral
@@ -3502,6 +3602,7 @@ UPDATE_VFD:
 		mov SBUF, #0B6h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont21:
 
 	; "Z" numeral
@@ -3509,6 +3610,7 @@ UPDATE_VFD:
 		mov SBUF, #0DAh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont22:
 
 	; "o" numeral
@@ -3516,6 +3618,7 @@ UPDATE_VFD:
 		mov SBUF, #3Ah				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont23:
 
 	; "e" numeral
@@ -3523,6 +3626,7 @@ UPDATE_VFD:
 		mov SBUF, #0DEh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont24:
 
 	; "d" numeral
@@ -3530,6 +3634,7 @@ UPDATE_VFD:
 		mov SBUF, #7Ah				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont25:
 
 	; "y" numeral
@@ -3537,6 +3642,7 @@ UPDATE_VFD:
 		mov SBUF, #76h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont26:
 
 	; "u" numeral
@@ -3544,6 +3650,7 @@ UPDATE_VFD:
 		mov SBUF, #38h				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont27:
 
 	; "H" numeral
@@ -3551,6 +3658,7 @@ UPDATE_VFD:
 		mov SBUF, #6Eh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont28:
 
 	; half of "M" numeral
@@ -3558,6 +3666,7 @@ UPDATE_VFD:
 		mov SBUF, #0ECh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont29:
 
 	; "b" numeral
@@ -3565,6 +3674,7 @@ UPDATE_VFD:
 		mov SBUF, #3Eh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont30:
 
 	; "P" numeral
@@ -3572,20 +3682,23 @@ UPDATE_VFD:
 		mov SBUF, #0CEh				; send the third byte down the serial line
 		jnb TI, $ 					; wait for the entire byte to be sent
 		clr TI 						; the transmit interrupt flag is set by hardware but must be cleared by software
+		ljmp vfd_load_and_latch 	; jump to end
 	vfd_cont31:
 
-	
+	vfd_load_and_latch:
+
 	setb P3.5						; load the MAX6921
 	clr P3.5						; latch the MAX6921
 
 	; Now we prepare for the next cycle
+	clr c 								; clear carry bit
 	mov a, GRID_EN_1					; move GRID_EN_1 into accumulator
 	rlc a 								; rotate the accumlator left through carry (NOTE! the carry flag gets rotated into bit 0)
 	mov GRID_EN_1, a 					; move the rotated result back into GRID_EN_1
 	mov a, GRID_EN_2					; move GRID_EN_2 into the accumlator
 	rlc a 								; rotate the acculator left through carry (NOTE! the carry flag gest rotated into bit 0)
 	mov GRID_EN_2, a 					; move the rotated result back into GRID_EN_2
-	clr c 								; clear the carry flag
+	; clr c 								; clear the carry flag
 	cjne R1, #3Ch, vfd_cont32 			; check if a complete grid cycle has finished (GRID_INDX == #3Ch)
 		lcall VFD_RESET					; reset the VFD cycle
 	vfd_cont32:
@@ -3650,6 +3763,13 @@ DECA_LOAD:
 		ljmp deca_load_cont6 					; exit (NOTE: "ret" DOES NOT work for some reason...)
 	deca_test_cont1:
 	; ==========================================
+
+	; mov a, DECA_STATE
+	; cjne a, #DECA_FLASHING_STATE, deca_load_cont10
+	; 	ljmp deca_load_cont9					; don't turn decatron on if in DECA_FLASHING_STATE
+	; deca_load_cont10:
+	; 	setb P0.4 								; make sure the decatron is on if not in DECA_FLASHING_STATE
+	; deca_load_cont9:
 
 	djnz R4, deca_load_cont1 					; decrement R4 by 1, and check if it is zero
 		lcall DECA_TOGGLE						; if R4 is zero, toggle the deca (call DECA_TOGGLE)
@@ -3858,6 +3978,7 @@ ret
 
 DECA_RESET:
 	mov DECA_LOAD_STATE, #00h   			; initialize the decatron
+	mov DECATRON, #01h
 
 	mov R4, DECATRON     			; initialize R4
 	mov DECATRON_BUFFER, DECATRON   ; reset the decatron DECATRON_BUFFER (!!! Important or the decatron will flash - reason for decatron bug after
@@ -3979,8 +4100,6 @@ ENTER_DECA_COUNTING_SECONDS_STATE:
 ret
 
 ENTER_DECA_FAST_STATE:
-	mov DECATRON, #00h 						; start DECATRON at zero
-
 	; Make Timer 0 ISR fire at 60Hz (or 50Hz depending on AC mains frequency)
 	mov TL0, #0FFh
 	mov TH0, #0FFh
@@ -3988,11 +4107,13 @@ ENTER_DECA_FAST_STATE:
 	mov TIMER_0_POST_SCALER_RELOAD, #3Ch 	; update TIMER_0_POST_SCALER_RELOAD
 	
 	mov DECA_STATE, #DECA_FAST_STATE 		; update decatron state variable
+	mov DECATRON, #00h 						; start DECATRON at zero
 ret
 
 ENTER_DECA_SCROLLING_STATE:
-	mov DECATRON, #00h 									; start with the decatron empty
 	mov DECA_STATE, #DECA_SCROLLING_STATE 				; update decatron state variable
+	; lcall DECA_RESET 									; call DECA_RESET (to position decatron at K0)
+	; mov DECATRON, #00h 									; start with the decatron empty
 ret
 
 ENTER_DECA_RADAR_STATE:
@@ -4002,8 +4123,8 @@ ENTER_DECA_RADAR_STATE:
 	mov TIMER_0_POST_SCALER, #3Ch 			; update TIMER_0_POST_SCALER (60 dec)
 	mov TIMER_0_POST_SCALER_RELOAD, #3Ch 	; update TIMER_0_POST_SCALER_RELOAD
 
-	lcall DECA_RESET 						; call DECA_RESET (to position decatron at K0)
 	mov DECA_STATE, #DECA_RADAR_STATE 		; update decatron state variable
+	lcall DECA_RESET 						; call DECA_RESET (to position decatron at K0)
 ret
 
 ENTER_DECA_COUNTDOWN_STATE:
@@ -4014,8 +4135,8 @@ ENTER_DECA_COUNTDOWN_STATE:
 	mov TIMER_0_POST_SCALER_RELOAD, #01h 		; update TIMER_0_POST_SCALER_RELOAD
 	; setb TR0 									; start timer 0
 
-	mov DECATRON, #1Eh 							; move 30 (dec) into DECATRON to light up full
 	mov DECA_STATE, #DECA_COUNTDOWN_STATE 		; update decatron state variable
+	mov DECATRON, #1Eh 							; move 30 (dec) into DECATRON to light up full
 ret
 
 ENTER_DECA_FLASHING_STATE:
@@ -4035,7 +4156,6 @@ ENTER_DECA_FLASHING_STATE:
 ret
 
 ENTER_DECA_FILL_UP_STATE:
-	mov DECATRON, #00h 						; start DECATRON at zero
 	setb DECA_IN_TRANSITION? 				; DECA_FILL_UP_STATE is a temporary state
 
 	; Make Timer 0 ISR fire at 30Hz (or 25Hz depending on AC mains frequency)
@@ -4045,6 +4165,7 @@ ENTER_DECA_FILL_UP_STATE:
 	mov TIMER_0_POST_SCALER_RELOAD, #1Eh 	; update TIMER_0_POST_SCALER_RELOAD
 	
 	mov DECA_STATE, #DECA_FILL_UP_STATE 	; update decatron state variable
+	mov DECATRON, #00h 						; start DECATRON at zero
 ret
 
 ; ==========================================
