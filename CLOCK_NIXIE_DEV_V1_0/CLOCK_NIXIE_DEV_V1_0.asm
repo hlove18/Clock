@@ -1829,8 +1829,8 @@ TIMER_0_SERVICE:
 	; Check if DECA_STATE = DECA_FILL_UP_STATE
 	mov a, DECA_STATE
 	cjne a, #DECA_FILL_UP_STATE, timer_0_service_cont4
-		; check if transition is into DECA_SCROLLING_STATE
-		jb TO_SCROLLING?, timer_0_service_cont15
+		; ; check if transition is into DECA_SCROLLING_STATE
+		; jb TO_SCROLLING?, timer_0_service_cont15
 			; transition is into DECA_COUNTING_SECONDS_STATE
 			mov a, SECONDS 										; check if finished with the transition (DECATRON = SECONDS)
 			cjne a, DECATRON, timer_0_service_cont5 			; check if decatron is displaying current seconds
@@ -1838,35 +1838,35 @@ TIMER_0_SERVICE:
 				clr DECA_IN_TRANSITION? 						; clear the transition bit
 				ljmp timer_0_service_cont5
 
-		timer_0_service_cont15:
-			; transition is into DECA_SCROLLING_STATE
-			; check if finished with the transition (DECATRON = number of pins to light up in this menu)
-			mov a, NUMBER_OF_ACTIVE_SETTINGS
+		; timer_0_service_cont15:
+		; 	; transition is into DECA_SCROLLING_STATE
+		; 	; check if finished with the transition (DECATRON = number of pins to light up in this menu)
+		; 	mov a, NUMBER_OF_ACTIVE_SETTINGS
 
-			cjne a, #08h, timer_0_service_cont20
-				; NUMBER_OF_ACTIVE_SETTINGS is 8
-				mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_8_SETTINGS    	; DPTR points to the start of the lookup table
-				sjmp timer_0_service_cont21
+		; 	cjne a, #08h, timer_0_service_cont20
+		; 		; NUMBER_OF_ACTIVE_SETTINGS is 8
+		; 		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_8_SETTINGS    	; DPTR points to the start of the lookup table
+		; 		sjmp timer_0_service_cont21
 
-			timer_0_service_cont20:
-			cjne a, #07h, timer_0_service_cont22
-				; NUMBER_OF_ACTIVE_SETTINGS is 7
-				mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_7_SETTINGS    	; DPTR points to the start of the lookup table
-				sjmp timer_0_service_cont21
+		; 	timer_0_service_cont20:
+		; 	cjne a, #07h, timer_0_service_cont22
+		; 		; NUMBER_OF_ACTIVE_SETTINGS is 7
+		; 		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_7_SETTINGS    	; DPTR points to the start of the lookup table
+		; 		sjmp timer_0_service_cont21
 
-			timer_0_service_cont22:
-				; NUMBER_OF_ACTIVE_SETTINGS is 5
-				mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_5_SETTINGS    	; DPTR points to the start of the lookup table
+		; 	timer_0_service_cont22:
+		; 		; NUMBER_OF_ACTIVE_SETTINGS is 5
+		; 		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_5_SETTINGS    	; DPTR points to the start of the lookup table
 
-			timer_0_service_cont21:
-			mov a, SETTINGS_SUB_STATE           					; SETTINGS_SUB_STATE is the offset from the start of the lookup table
-			dec a 													; decrement a such that lookup table offset is right (NOTE: lookup tables
-																	; load (a+1)th item in lookup table)
-			movc a, @a + DPTR   									; moves the (a+1)th lookup table item into the accumulator
-			cjne a, DECATRON, timer_0_service_cont5 				; check if decatron is displaying the number of pins for this menu item
-				lcall ENTER_DECA_SCROLLING_STATE 					; transition to DECA_SCROLLING_STATE
-				clr DECA_IN_TRANSITION? 							; clear the transition bit
-				clr TO_SCROLLING? 									; clear the transition to scrolling bit
+		; 	timer_0_service_cont21:
+		; 	mov a, SETTINGS_SUB_STATE           					; SETTINGS_SUB_STATE is the offset from the start of the lookup table
+		; 	dec a 													; decrement a such that lookup table offset is right (NOTE: lookup tables
+		; 															; load (a+1)th item in lookup table)
+		; 	movc a, @a + DPTR   									; moves the (a+1)th lookup table item into the accumulator
+		; 	cjne a, DECATRON, timer_0_service_cont5 				; check if decatron is displaying the number of pins for this menu item
+		; 		lcall ENTER_DECA_SCROLLING_STATE 					; transition to DECA_SCROLLING_STATE
+		; 		clr DECA_IN_TRANSITION? 							; clear the transition bit
+		; 		clr TO_SCROLLING? 									; clear the transition to scrolling bit
 
 		timer_0_service_cont5:
 		; if DECA_STATE is DECA_FILL_UP_STATE, increment DECATRON with every 30Hz interrupt
@@ -1885,51 +1885,52 @@ TIMER_0_SERVICE:
 		; check if transitioning
 		jnb DECA_IN_TRANSITION?, timer_0_service_cont6
 			jb TO_COUNTDOWN?, timer_0_service_cont10 				; check if transition is into DECA_COUNTING_SECONDS_STATE
-				; jb TO_SCROLLING?, timer_0_service_cont15 			; check if transition is into DECA_SCROLLING_STATE
+				jb TO_SCROLLING?, timer_0_service_cont15 			; check if transition is into DECA_SCROLLING_STATE
 					; check if finished with the transition (DECATRON = SECONDS)
 					mov a, SECONDS
 					cjne a, DECATRON, timer_0_service_cont6 		; check if decatron is displaying current seconds
 						lcall ENTER_DECA_COUNTING_SECONDS_STATE 	; transition to DECA_COUNTING_SECONDS_STATE
 						clr DECA_IN_TRANSITION? 					; clear the transition bit
-						ljmp timer_0_service_cont6
+						ljmp timer_0_service_cont7
 
 			timer_0_service_cont10: 								; transition is into DECA_COUNTDOWN_STATE
 				; check if finished with the transition (DECATRON = 30 dec)
 				mov a, #1Eh
-				cjne a, DECATRON, timer_0_service_cont6 			; check if decatron is displaying current seconds
+				cjne a, DECATRON, timer_0_service_cont6 			; check if decatron is displaying 30
 					lcall ENTER_DECA_COUNTDOWN_STATE 				; transition to DECA_COUNTDOWN_STATE
 					clr DECA_IN_TRANSITION? 						; clear the transition bit
 					clr TO_COUNTDOWN? 								; clear the transition to countdown bit
-					ljmp timer_0_service_cont6
+					ljmp timer_0_service_cont7
 
-			; timer_0_service_cont15: 								; transition is into DECA_SCROLLING_STATE
-			; 	; check if finished with the transition (DECATRON = number of pins to light up in this menu)
-			; 	mov a, NUMBER_OF_ACTIVE_SETTINGS
+			timer_0_service_cont15: 								; transition is into DECA_SCROLLING_STATE
+				; check if finished with the transition (DECATRON = number of pins to light up in this menu)
+				mov a, NUMBER_OF_ACTIVE_SETTINGS
 
-			; 	cjne a, #08h, timer_0_service_cont20
-			; 		; NUMBER_OF_ACTIVE_SETTINGS is 8
-			; 		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_8_SETTINGS    	; DPTR points to the start of the lookup table
-			; 		sjmp timer_0_service_cont21
+				cjne a, #08h, timer_0_service_cont20
+					; NUMBER_OF_ACTIVE_SETTINGS is 8
+					mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_8_SETTINGS    	; DPTR points to the start of the lookup table
+					sjmp timer_0_service_cont21
 
-			; 	timer_0_service_cont20:
-			; 	cjne a, #07h, timer_0_service_cont22
-			; 		; NUMBER_OF_ACTIVE_SETTINGS is 7
-			; 		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_7_SETTINGS    	; DPTR points to the start of the lookup table
-			; 		sjmp timer_0_service_cont21
+				timer_0_service_cont20:
+				cjne a, #07h, timer_0_service_cont22
+					; NUMBER_OF_ACTIVE_SETTINGS is 7
+					mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_7_SETTINGS    	; DPTR points to the start of the lookup table
+					sjmp timer_0_service_cont21
 
-			; 	timer_0_service_cont22:
-			; 		; NUMBER_OF_ACTIVE_SETTINGS is 5
-			; 		mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_5_SETTINGS    	; DPTR points to the start of the lookup table
+				timer_0_service_cont22:
+					; NUMBER_OF_ACTIVE_SETTINGS is 5
+					mov DPTR, #DECA_SCROLL_LOOKUP_TABLE_5_SETTINGS    	; DPTR points to the start of the lookup table
 
-			; 	timer_0_service_cont21:
-			; 	mov a, SETTINGS_SUB_STATE           					; SETTINGS_SUB_STATE is the offset from the start of the lookup table
-			; 	dec a 													; decrement a such that lookup table offset is right (NOTE: lookup tables
-			; 															; load (a+1)th item in lookup table)
-			; 	movc a, @a + DPTR   									; moves the (a+1)th lookup table item into the accumulator
-			; 	cjne a, DECATRON, timer_0_service_cont6 				; check if decatron is displaying the number of pins for this menu item
-			; 		lcall ENTER_DECA_SCROLLING_STATE 					; transition to DECA_SCROLLING_STATE
-			; 		clr DECA_IN_TRANSITION? 							; clear the transition bit
-			; 		clr TO_SCROLLING? 									; clear the transition to scrolling bit
+				timer_0_service_cont21:
+				mov a, SETTINGS_SUB_STATE           					; SETTINGS_SUB_STATE is the offset from the start of the lookup table
+				dec a 													; decrement a such that lookup table offset is right (NOTE: lookup tables
+																		; load (a+1)th item in lookup table)
+				movc a, @a + DPTR   									; moves the (a+1)th lookup table item into the accumulator
+				cjne a, DECATRON, timer_0_service_cont6 				; check if decatron is displaying the number of pins for this menu item
+					lcall ENTER_DECA_SCROLLING_STATE 					; transition to DECA_SCROLLING_STATE
+					clr DECA_IN_TRANSITION? 							; clear the transition bit
+					clr TO_SCROLLING? 									; clear the transition to scrolling bit
+					sjmp timer_0_service_cont7
 
 		timer_0_service_cont6:
 		; if DECA_STATE is DECA_FAST_STATE, increment DECATRON with every 60Hz interrupt
@@ -2703,8 +2704,8 @@ SHOW_TIME_STATE_TO_SETTINGS_STATE:
 	; Update DECA_STATE
 	; lcall ENTER_DECA_SCROLLING_STATE
 	setb TO_SCROLLING? 							; prepare to transition decatron to DECA_SCROLLING_STATE
-	lcall ENTER_DECA_FILL_UP_STATE 				; go into DECA_FILL_UP_STATE as transition to DECA_SCROLLING_STATE
-	; setb DECA_IN_TRANSITION? 					; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FAST_STATE 				; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
+	setb DECA_IN_TRANSITION? 					; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Update CLOCK_STATE
 	mov CLOCK_STATE, #SETTINGS_STATE
@@ -3141,8 +3142,8 @@ EXIT_SETTINGS_SET_TIMEZONE_STATE:
 	; Update DECA_STATE
 	; lcall ENTER_DECA_SCROLLING_STATE
 	setb TO_SCROLLING? 							; prepare to transition decatron to DECA_SCROLLING_STATE
-	lcall ENTER_DECA_FILL_UP_STATE 			; go into DECA_FILL_UP_STATE as transition to DECA_SCROLLING_STATE
-	; setb DECA_IN_TRANSITION? 				; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FAST_STATE 				; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
+	setb DECA_IN_TRANSITION? 					; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
 	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
@@ -3182,8 +3183,8 @@ EXIT_SETTINGS_SET_SNOOZE_STATE:
 	; Update DECA_STATE
 	; lcall ENTER_DECA_SCROLLING_STATE
 	setb TO_SCROLLING? 							; prepare to transition decatron to DECA_SCROLLING_STATE
-	lcall ENTER_DECA_FILL_UP_STATE 			; go into DECA_FILL_UP_STATE as transition to DECA_SCROLLING_STATE
-	; setb DECA_IN_TRANSITION? 				; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FAST_STATE 				; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
+	setb DECA_IN_TRANSITION? 					; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
 	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
@@ -3232,8 +3233,8 @@ EXIT_SETTINGS_SET_GPS_SYNC_TIME_STATE:
 	; Update DECA_STATE
 	; lcall ENTER_DECA_SCROLLING_STATE
 	setb TO_SCROLLING? 						; prepare to transition decatron to DECA_SCROLLING_STATE
-	lcall ENTER_DECA_FILL_UP_STATE 			; go into DECA_FILL_UP_STATE as transition to DECA_SCROLLING_STATE
-	; setb DECA_IN_TRANSITION? 				; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FAST_STATE 			; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
+	setb DECA_IN_TRANSITION? 				; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
 	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
@@ -3811,15 +3812,29 @@ DECA_LOAD:
 	cjne R3, #02h, deca_load_cont6 			; if we are in DECA_LOAD_STATE 2, jump the arc to Kx
 		jb DECA_FORWARDS?, deca_load_cont7 	; check direction of swiping
 			; if swiping counter-clockwise
+			; if R4 = 1 & DECATRON is less than or equal to 30, pull K0 low, else pull Kx low.
+			cjne R4, #01h, deca_load_cont11
+				; see if DECATRON is greater than or less than (or equal to) 30
+				clr c 							; clear the carry bit
+				mov a, #1Eh						; move 30 into the accumulator
+				subb a, DECATRON				; perform 30-DECATRON.  if DECATRON is greater than 30, the carry flag (c) will be set
+				jc deca_load_cont11
+					; R4 = 1 & DECATRON is less than or equal to 30, so we should be pulling K0 low:
+					setb P0.0 					; pull K0 low (note inverter between 8051 pin and decatron)
+					clr P0.1 					; pull G1 high (note inverter between 8051 pin and decatron)
+					dec DECA_LOAD_STATE 		; DECA_LOAD_STATE:  2 --> 1
+					sjmp deca_load_cont6
+			deca_load_cont11:
+			; if NOT at K0:
 			setb P0.3 							; pull Kx low (note inverter between 8051 pin and decatron)
-			setb P0.0 							; pull K0 low (note inverter between 8051 pin and decatron)
 			clr P0.1 							; pull G1 high (note inverter between 8051 pin and decatron)
 			dec DECA_LOAD_STATE 				; DECA_LOAD_STATE:  2 --> 1
 			sjmp deca_load_cont6 				; exit
 		deca_load_cont7:
 		; if swiping clockwise
+		; NO NEED TO EVER PULL K0 LOW SWIPING CLOCKWISE:
+		; setb P0.0 							; pull K0 low (note inverter between 8051 pin and decatron)
 		setb P0.3 								; pull Kx low (note inverter between 8051 pin and decatron)
-		setb P0.0 								; pull K0 low (note inverter between 8051 pin and decatron)
 		clr P0.2 								; pull G2 high (note inverter between 8051 pin and decatron)
 		mov DECA_LOAD_STATE, #00h 				; DECA_LOAD_STATE:  2 --> 0
 		sjmp deca_load_cont6 					; exit
@@ -3884,7 +3899,7 @@ UPDATE_DECA:
 ret
 
 DECA_TOGGLE:
-	; This function is called from UPDATE_DECA whenever the swiping direction has to change.
+	; This function is called from UPDATE_LOAD whenever the swiping direction has to change.
 	; If going from forward to backwards, DECA_LOAD_STATE is decremented by 2 (incremented by 1) (mod 3).
 	; If going from backwards to forward, DECA_LOAD_STATE is incremented by 2 (decremented by 1) (mod 3).
 	; DECA_FORWARDS? is a bit that keeps track of swiping direction.
@@ -3895,7 +3910,7 @@ DECA_TOGGLE:
 	; R4 stores the count of how many cathodes need to be lit up before switching directions.
 	; R3 stores DECA_LOAD_STATE.
 
-	; No need to push SFRs onto the stack because this function is called only from UPDATE_DECA, which
+	; No need to push SFRs onto the stack because this function is called only from DECA_LOAD, which
 	; does the pushing/popping.
 
 
