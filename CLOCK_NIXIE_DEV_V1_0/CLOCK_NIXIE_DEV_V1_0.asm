@@ -520,7 +520,9 @@ INIT:
 
 	; Timer 2 interrupt initialization (for display interrupt)
 	setb ET2				; enable timer 2 interrupt
-	mov T2CON, #04h			; set timer 2 in auto reload
+	mov T2CON, #04h			; set timer 2 in auto reload (this starts timer 2!)
+	mov TH2, #0FFh			; initialize timer 2
+	mov TL2, #00h 			; initialize timer 2
 	mov RCAP2H, #0FFh		; set high byte of timer 2 reload
 	mov RCAP2L, #00h		; set low byte of timer 2 reload
 
