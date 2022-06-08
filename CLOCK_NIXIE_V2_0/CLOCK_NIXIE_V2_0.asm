@@ -57,7 +57,7 @@ reti 							; exit
 DISPLAY_ISR:
 	clr TF2					; clear timer 2 interrupt flag
 	lcall UPDATE_DISPLAYS 	; update the displays
-reti 						; exit
+reti 							; exit
 
 
 .org 100h
@@ -104,7 +104,7 @@ INIT:
 
 	; !!!NOTE: THIS IS DIFFERENT THAN YOU WOULD EXPECT: MOV iram_addr1,iram_addr2 MOVES CONTENTS OF iram_addr1 INTO iram_addr2!!!
 	; COULD BE WRONG!!:
-	mov CLOCK_STATE, #SHOW_TIME_STATE	; start in SHOW_TIME_STATE
+	mov CLOCK_STATE, #GPS_SYNC_STATE	; start in GPS_SYNC_STATE (transition actions called at end of INIT)
 
 	; Set Time Sub-State Variable:
 	.equ SET_TIME_SUB_STATE, 7Dh
@@ -150,7 +150,7 @@ INIT:
 
 
 	.equ NUMBER_OF_ACTIVE_SETTINGS, 6Ah
-	mov NUMBER_OF_ACTIVE_SETTINGS, #04h 		; assume for now there is no GPS present
+	mov NUMBER_OF_ACTIVE_SETTINGS, #05h 		; assume for now there is no GPS present
 
 	NUMBER_OF_SETTINGS equ 8 					; total number of settings; update this if adding more or taking out settings
 
@@ -416,6 +416,7 @@ INIT:
 	.equ ROT_FLAG, 			   21h.4
 	.equ TRANSITION_STATE?,	   22h.0
 	.equ SETTINGS_BUTTON_FLAG, 22h.1
+	.equ REMOTE_BUTTON_FLAG,   22h.2
 
 	; Fill in with values
 	clr A_FLAG
@@ -425,6 +426,7 @@ INIT:
 	clr ROT_FLAG
 	clr TRANSITION_STATE?
 	clr SETTINGS_BUTTON_FLAG
+	clr REMOTE_BUTTON_FLAG
 
 	; Setup for rotary enocder pull-up resistors
 	setb P3.2 						; Set P3.2 high to use internal pull-up resistor
@@ -688,42 +690,60 @@ SHOW_TIME:
 
 	; mov DECATRON, SECONDS --> This is taken care of in the decatron state machine
 
+	; Check if an alarm is currently firing
+	mov a, ALARM_STATE
+	cjne a, #ALARM_FIRING_STATE, show_time_cont8
+		; alarm is firing, so do not GPS auto sync or register settings button presses
+		sjmp show_time_cont5
+	show_time_cont8:
+
 	; Check if there is a GPS
 	jnb GPS_PRESENT?, show_time_cont2
 		; GPS is present:
 		; Check if the alarm is currently not snoozing or firing
-		mov a, ALARM_STATE
-		cjne a, #ALARM_FIRING_STATE, show_time_cont3
-			sjmp show_time_cont2
-		show_time_cont3:
+		; mov a, ALARM_STATE
+		; cjne a, #ALARM_FIRING_STATE, show_time_cont3
+		; 	sjmp show_time_cont2
+		; show_time_cont3:
 		cjne a, #ALARM_SNOOZING_STATE, show_time_cont4
 			sjmp show_time_cont2
-			show_time_cont4:
-			; Alarm is not firing or snoozing
-			; TODO: Check if GPS sync is enabled
-			; Check if time to sync to the GPS
-			mov a, GPS_SYNC_TIME_HOURS										; check if time to sync
-			cjne a, HOURS, show_time_cont2 									; compare sync hours to current hours
-				mov a, GPS_SYNC_TIME_MINUTES
-				cjne a, MINUTES, show_time_cont2 							; compare sync minutes to current minutes
-					mov a, #02h
-					cjne a, SECONDS, show_time_cont2 						; compare current seconds to 2
-						; TODO:  turn off the GPS sync light
-						jnb AUTO_SYNC?, show_time_cont2 					; check if GPS auto sync is enabled
-							lcall ENTER_GPS_SYNC_STATE 						; transition to GPS_SYNC_STATE
-							sjmp show_time_cont1
+		show_time_cont4:
+		; Alarm is not firing or snoozing
+		; TODO: Check if GPS sync is enabled
+		; Check if time to sync to the GPS
+		mov a, GPS_SYNC_TIME_HOURS										; check if time to sync
+		cjne a, HOURS, show_time_cont2 									; compare sync hours to current hours
+			mov a, GPS_SYNC_TIME_MINUTES
+			cjne a, MINUTES, show_time_cont2 							; compare sync minutes to current minutes
+				mov a, #02h
+				cjne a, SECONDS, show_time_cont2 						; compare current seconds to 2
+					; TODO:  turn off the GPS sync light
+					jnb AUTO_SYNC?, show_time_cont2 					; check if GPS auto sync is enabled
+						lcall ENTER_GPS_SYNC_STATE 						; transition to GPS_SYNC_STATE
+						sjmp show_time_cont1
 	show_time_cont2:
 
 	; check for a settings button press
 	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
-	jnb TRANSITION_STATE?, show_time_cont5 
-		lcall SHOW_TIME_STATE_TO_SETTINGS_STATE	; if there was a settings button press (TRANSITION_STATE? bit is set), go to SETTINGS state
+	jnb TRANSITION_STATE?, show_time_cont5
+		lcall SHOW_TIME_STATE_TO_SETTINGS_STATE		; if there was a settings button press (TRANSITION_STATE? bit is set), go to SETTINGS state
 		ljmp show_time_cont1
 	show_time_cont5:
+
+	; check for a remote button press
+	lcall CHECK_FOR_REMOTE_BUTTON_SHORT_PRESS
+	; CHECK_FOR_REMOTE_BUTTON_SHORT_PRESS will automatically redirect any short remote press to snooze the alarm if
+	; the alarm is currently firing.
+	jnb TRANSITION_STATE?, show_time_cont6 
+		lcall SHOW_TIME_STATE_TO_SHOW_ALARM_STATE	; if there was a remote button press (TRANSITION_STATE? bit is set), go to SHOW_ALARM state
+		ljmp show_time_cont1
+	show_time_cont6:
 
 	; check for rotary encoder press
 	mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
 	lcall CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS
+	; CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS will automatically redirect any short or long rot enc press to snooze the alarm if
+	; the alarm is currently firing.
 
 	; Check the NEXT_CLOCK_STATE
 	mov a, NEXT_CLOCK_STATE
@@ -798,6 +818,13 @@ SHOW_ALARM:
 
 	; mov DECATRON, SECONDS --> This is taken care of in decatron state machine
 
+	; listen for remote button press
+	lcall CHECK_FOR_REMOTE_BUTTON_SHORT_PRESS
+	jnb TRANSITION_STATE?, show_alarm_cont3  
+		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE	; if there was a remote button press (TRANSITION_STATE? bit is set), go to SHOW_TIME state
+		ljmp show_alarm_cont2
+	show_alarm_cont3:
+	
 	; listen for rotary encoder press
 	mov NEXT_CLOCK_STATE, #SHOW_ALARM_STATE
 	lcall CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS
@@ -1592,6 +1619,8 @@ GPS_OBTAIN_FIX:
 	mov NIX2, MIN_TENS
 	mov NIX1, MIN_ONES
 
+	; Fix detection occurs in TIMER_1_SERVICE.
+
 	; check the state of GPS_PRESENT? bit
 	; Note:  the clock is only in GPS_OBTAIN_FIX without a physical GPS present if the clock is just starting up.  GPS_PRESENT? bit is 
 	; initialized to be false.  Thus, if the clock isn't sure if a GPS is present or not at this point, it just hasn't had enough time
@@ -1650,13 +1679,13 @@ GPS_OBTAIN_DATA:
 	jnb TRANSITION_STATE?, gps_obtain_data_cont1
 		; check the state of TIMZONE_SET? bit
 		jnb TIMEZONE_SET?, gps_obtain_data_cont2
-				; TIMEZONE has been set:
-				lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
-				sjmp gps_obtain_data_cont0
-			gps_obtain_data_cont2:
-				; TIMEZONE has not been set AND there is a GPS present:
-				lcall ENTER_GPS_SET_TIMEZONE_STATE
-				sjmp gps_obtain_data_cont0
+			; TIMEZONE has been set:
+			lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE
+			sjmp gps_obtain_data_cont0
+		gps_obtain_data_cont2:
+			; TIMEZONE has not been set AND there is a GPS present:
+			lcall ENTER_GPS_SET_TIMEZONE_STATE
+			sjmp gps_obtain_data_cont0
 	gps_obtain_data_cont1:
 
 
@@ -1782,7 +1811,7 @@ ALARM_ENABLED:
 				mov a, #00h
 				cjne a, SECONDS, alarm_enabled_cont1 					; compare current seconds to 0
 					; it is currently the right time to fire the alarm
-					; TODO:  check if we are in a set time or set alarm state, in which case don't fire the alarm (jump to alarm_enabled_cont1 )
+					; TODO:  check if we are in a set time or set alarm state, in which case don't fire the alarm (jump to alarm_enabled_cont1)
 
 					; check if CLOCK_STATE is GPS_SYNC_STATE
 					mov a, CLOCK_STATE
@@ -1793,6 +1822,24 @@ ALARM_ENABLED:
 																		; fill-up state, which we want to override with the below line's alarm
 																		; transition, which puts the decatron in fast mode
 					alarm_enabled_cont2:
+					; check if CLOCK_STATE is SHOW_ALARM_STATE
+					cjne a, #SHOW_ALARM_STATE, alarm_enabled_cont3
+						; clock is currently showing the alarm
+						lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE 		; move to show the time (which now matches the alarm time, so this might
+																		; not matter)
+						clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+																		; fill-up state, which we want to override with the below line's alarm
+																		; transition, which puts the decatron in fast mode
+					alarm_enabled_cont3:
+					; check if CLOCK_STATE is SETTINGS_STATE
+					cjne a, #SETTINGS_STATE, alarm_enabled_cont4
+						; clock is currently in the settings menu
+						lcall SETTINGS_STATE_TO_SHOW_TIME_STATE 		; abort any settings changes since the alarm has priority
+						clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+																		; fill-up state, which we want to override with the below line's alarm
+																		; transition, which puts the decatron in fast mode
+
+					alarm_enabled_cont4:
 					lcall ALARM_ENABLED_STATE_TO_ALARM_FIRING_STATE 	; transition to alarm firing state
 					sjmp alarm_enabled_cont1
 
@@ -2380,8 +2427,9 @@ SERIAL_SERVICE:
 ret
 
 ; ====== State Transition Functions ======
+; Hardware button events =================
 CHECK_FOR_ROT_ENC_SHORT_PRESS:
-	; This function is used to transisiton between sub-states, such as SET_MM, SET_DD, etc. in SET_TIME_STATE
+	; This function is used to transition between sub-states, such as SET_MM, SET_DD, etc. in SET_TIME_STATE
 	clr TRANSITION_STATE? 							; clear the TRANSITION_STATE? bit
 
 	jnb P3.6, check_short_press_cont0				; check if rotary encoder is still pressed
@@ -2391,7 +2439,7 @@ CHECK_FOR_ROT_ENC_SHORT_PRESS:
 	jb BUTTON_FLAG, check_short_press_cont1			; check to make sure BUTTON_FLAG is cleared
 		jb P3.6, check_short_press_cont1			; check if rotary encoder button is pressed
 			; mov R2, #28h							; load R2 for 40 counts
-			;mov R2, #14h							; load R2 for 20 counts
+			; mov R2, #14h							; load R2 for 20 counts
 			mov R2, #0Ah
 			mov R3, #0FFh							; load R3 for 255 counts
 			check_short_press_loop0:				; rotary encoder button must be depressed for ~20ms before time/date can be
@@ -2407,7 +2455,7 @@ CHECK_FOR_ROT_ENC_SHORT_PRESS:
 ret
 
 CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
-	; This function is used to transisiton between states, such as SET_TIME_STATE, SHOW_ALARM_STATE, etc.
+	; This function is used to transition between states, such as SET_TIME_STATE, SHOW_ALARM_STATE, etc.
 	; This function listens for a rotary encoder short or long button press and determines which state to
 	; go to next based on the current CLOCK_STATE
 
@@ -2418,7 +2466,7 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 	jb BUTTON_FLAG, cont15					; check to make sure BUTTON_FLAG is cleared
 		jb P3.6, cont15						; check if rotary encoder button is pressed
 			; mov R2, #0FFh					; load R2 for 255 counts
-			mov R2, #0B0h					; load R2 for 255 counts
+			mov R2, #0B0h					; load R2 for 176 counts
 			mov R3, #0FFh					; load R3 for 255 counts
 			loop3:							; rotary encoder button must be depressed for ~130ms before time/date can be changed
 											; (also acts as debounce)
@@ -2462,7 +2510,7 @@ CHECK_FOR_ROT_ENC_SHORT_OR_LONG_PRESS:
 ret
 
 CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS:
-	; This function is used to transisiton between SHOW_TIME and SETTINGS states
+	; This function is used to transition between SHOW_TIME and SETTINGS states
 	clr TRANSITION_STATE? 							; clear the TRANSITION_STATE? bit
 
 	jnb P3.7, check_settings_short_press_cont0					; check if settings button is still pressed
@@ -2474,7 +2522,7 @@ CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS:
 			;mov R2, #14h										; load R2 for 20 counts
 			mov R2, #0Ah
 			mov R3, #0FFh										; load R3 for 255 counts
-			check_settings_short_press_loop0:					; settings button must be depressed for ~20ms before settings sub-state can be
+			check_settings_short_press_loop0:					; settings button must be depressed for ~20ms before settings state can be
 																; changed (also acts as debounce)
 				jb P3.7, check_settings_short_press_cont1		; check if settings button is still pressed
 				djnz R3, check_settings_short_press_loop0		; decrement count in R3
@@ -2484,6 +2532,41 @@ CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS:
 			setb TRANSITION_STATE?								; set the TRANSITION_STATE? bit
 			lcall BEEP
 	check_settings_short_press_cont1:
+ret
+
+CHECK_FOR_REMOTE_BUTTON_SHORT_PRESS:
+	; This function is used to transition between SHOW_TIME and SHOW_ALARM states, and also activate snoozing
+	clr TRANSITION_STATE? 									; clear the TRANSITION_STATE? bit
+
+	jnb P0.5, check_remote_short_press_cont0				; check if remote is still pressed
+		clr REMOTE_BUTTON_FLAG								; if not, clear the remote button flag
+	check_remote_short_press_cont0:
+
+	jb REMOTE_BUTTON_FLAG, check_remote_short_press_cont1	; check to make sure REMOTE_BUTTON_FLAG is cleared
+		jb P0.5, check_remote_short_press_cont1				; check if remote button is pressed
+			; mov R2, #28h									; load R2 for 40 counts
+			; mov R2, #14h									; load R2 for 20 counts
+			mov R2, #0Ah
+			mov R3, #0FFh									; load R3 for 255 counts
+			check_remote_short_press_loop0:					; remote button must be depressed for ~20ms before state
+															; changed (also acts as debounce)
+				jb P0.5, check_remote_short_press_cont1		; check if remote button is still pressed
+				djnz R3, check_remote_short_press_loop0		; decrement count in R3
+			mov R3, #0FFh									; reload R3 in case loop is needed again
+			djnz R2, check_remote_short_press_loop0			; count R3 down again until R2 counts down
+
+			; Check if the alarm is firing
+			mov a, ALARM_STATE
+			cjne a, #ALARM_FIRING_STATE, check_remote_short_press_cont2
+				; if ALARM_STATE = ALARM_FIRING_STATE:
+				lcall ALARM_FIRING_STATE_TO_ALARM_SNOOZING_STATE 	; snooze the alarm
+				setb REMOTE_BUTTON_FLAG								; set the REMOTE_BUTTON_FLAG
+				ljmp check_remote_short_press_cont1 				; jump to end
+			check_remote_short_press_cont2: 						; alarm is not firing, so interpret rotary encoder activity for CLOCK_STATE transitions
+			setb REMOTE_BUTTON_FLAG									; set the REMOTE_BUTTON_FLAG	
+			setb TRANSITION_STATE?									; set the TRANSITION_STATE? bit
+			lcall BEEP 												; beep
+	check_remote_short_press_cont1:
 ret
 
 ; Clock state machine transitions ========
@@ -2676,7 +2759,7 @@ SETTINGS_STATE_TO_SHOW_TIME_STATE:
 	; Update CLOCK_STATE
 	mov CLOCK_STATE, #SHOW_TIME_STATE
 	; lcall DECA_TRANSITION  						; transition the decatron (MUST HAPPEN AFTER STATE CHANGE, 
-	;          									; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
+	;          										; OR FLASHING WILL CONTINUE IN DECA_TRANSITION)
 ret
 
 SHOW_TIME_STATE_TO_SETTINGS_STATE:
@@ -2725,8 +2808,15 @@ SHOW_TIME_STATE_TO_SETTINGS_STATE:
 	; turn on the VFD (always on when not in SHOW_TIME or GPS_SYNC)
 	clr P1.0
 
+	; Cancel snooze, leaving alarm enabled
+	mov a, ALARM_STATE
+	cjne a, #ALARM_SNOOZING_STATE, show_time_state_to_settings_state_cont3
+		lcall ALARM_SNOOZING_STATE_TO_ALARM_ENABLED_STATE					; if in ALARM_SNOOZING_STATE, cancel snooze by going to
+																			; ALARM_ENABLED_STATE
+	show_time_state_to_settings_state_cont3:
+
 	; Update DECA_STATE
-	; lcall ENTER_DECA_SCROLLING_STATE
+	lcall ENTER_DECA_SCROLLING_STATE
 	setb TO_SCROLLING? 							; prepare to transition decatron to DECA_SCROLLING_STATE
 	lcall ENTER_DECA_FAST_STATE 				; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
 	setb DECA_IN_TRANSITION? 					; prepare to transition decatron to DECA_SCROLLING_STATE
@@ -3165,15 +3255,15 @@ EXIT_SETTINGS_SET_TIMEZONE_STATE:
 
 	; Update DECA_STATE
 	; lcall ENTER_DECA_SCROLLING_STATE
-	setb TO_SCROLLING? 							; prepare to transition decatron to DECA_SCROLLING_STATE
-	lcall ENTER_DECA_FAST_STATE 				; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
-	setb DECA_IN_TRANSITION? 					; prepare to transition decatron to DECA_SCROLLING_STATE
+	setb TO_SCROLLING? 								; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FAST_STATE 					; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
+	setb DECA_IN_TRANSITION? 						; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
-	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
-	mov LOWER_BOUND, #01h 					; SETTINGS_SUB_STATE can be 1 min
+	mov UPPER_BOUND, NUMBER_OF_ACTIVE_SETTINGS		; SETTINGS_SUB_STATE can be NUMBER_OF_ACTIVE_SETTINGS max
+	mov LOWER_BOUND, #01h 							; SETTINGS_SUB_STATE can be 1 min
 
-	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
+	mov R0, #6Ch									; corresponds to memory address of SETTINGS_SUB_STATE
 ret
 
 ENTER_SETTINGS_SET_SNOOZE_STATE:
@@ -3206,15 +3296,15 @@ EXIT_SETTINGS_SET_SNOOZE_STATE:
 
 	; Update DECA_STATE
 	; lcall ENTER_DECA_SCROLLING_STATE
-	setb TO_SCROLLING? 							; prepare to transition decatron to DECA_SCROLLING_STATE
-	lcall ENTER_DECA_FAST_STATE 				; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
-	setb DECA_IN_TRANSITION? 					; prepare to transition decatron to DECA_SCROLLING_STATE
+	setb TO_SCROLLING? 								; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FAST_STATE 					; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
+	setb DECA_IN_TRANSITION? 						; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
-	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
-	mov LOWER_BOUND, #01h 					; SETTINGS_SUB_STATE can be 1 min
+	mov UPPER_BOUND, NUMBER_OF_ACTIVE_SETTINGS		; SETTINGS_SUB_STATE can be NUMBER_OF_ACTIVE_SETTINGS max
+	mov LOWER_BOUND, #01h 							; SETTINGS_SUB_STATE can be 1 min
 
-	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
+	mov R0, #6Ch									; corresponds to memory address of SETTINGS_SUB_STATE
 ret
 
 ENTER_SETTINGS_SET_GPS_SYNC_HR_STATE:
@@ -3256,15 +3346,15 @@ EXIT_SETTINGS_SET_GPS_SYNC_TIME_STATE:
 
 	; Update DECA_STATE
 	; lcall ENTER_DECA_SCROLLING_STATE
-	setb TO_SCROLLING? 						; prepare to transition decatron to DECA_SCROLLING_STATE
-	lcall ENTER_DECA_FAST_STATE 			; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
-	setb DECA_IN_TRANSITION? 				; prepare to transition decatron to DECA_SCROLLING_STATE
+	setb TO_SCROLLING? 								; prepare to transition decatron to DECA_SCROLLING_STATE
+	lcall ENTER_DECA_FAST_STATE 					; go into DECA_FAST_STATE as transition to DECA_SCROLLING_STATE
+	setb DECA_IN_TRANSITION? 						; prepare to transition decatron to DECA_SCROLLING_STATE
 
 	; Set the upper and lower bounds
-	mov UPPER_BOUND, #NUMBER_OF_SETTINGS	; SETTINGS_SUB_STATE can be NUMBER_OF_SETTINGS max
-	mov LOWER_BOUND, #01h 					; SETTINGS_SUB_STATE can be 1 min
+	mov UPPER_BOUND, NUMBER_OF_ACTIVE_SETTINGS		; SETTINGS_SUB_STATE can be NUMBER_OF_ACTIVE_SETTINGS max
+	mov LOWER_BOUND, #01h 							; SETTINGS_SUB_STATE can be 1 min
 
-	mov R0, #6Ch							; corresponds to memory address of SETTINGS_SUB_STATE
+	mov R0, #6Ch									; corresponds to memory address of SETTINGS_SUB_STATE
 ret
 
 ; ========================================
@@ -3766,7 +3856,6 @@ DECA_LOAD:
 	mov a, DECATRON   							; move DECATRON into the accumulator
 	cjne a, #00h, deca_test_cont0				; if DECATRON = 0, then no need to toggle, blank the decatron and skip to the end,
 												; otherwise, continue
-		
 		; don't blank decatron if in DECA_FAST_STATE
 		mov a, DECA_STATE
 		cjne a, #DECA_FAST_STATE, deca_load_cont8
@@ -4214,7 +4303,7 @@ ENC_A:
 	push acc
 	push PSW
 
-	clr c 										; clear the carry bit
+	clr c 											; clear the carry bit
 
 	jnb P3.3, enc_a_cont0
 		setb A_FLAG
@@ -4232,7 +4321,7 @@ ENC_A:
 		setb A_FLAG
 	enc_a_cont1:
 
-	jnb INC_LEAP_YEAR?, enc_a_cont2				; check if INC_LEAP_YEAR? bit is set
+	jnb INC_LEAP_YEAR?, enc_a_cont2					; check if INC_LEAP_YEAR? bit is set
 		;if INC_LEAP_YEAR? bit is set, increment @R0 (YEAR) three more times (for a total of 4 times) 
 		inc @R0
 		inc @R0
@@ -4240,11 +4329,11 @@ ENC_A:
 	enc_a_cont2:
 
 	; check if @R0 is greater than UPPER_BOUND
-	mov a, UPPER_BOUND 							; move UPPER_BOUND into accumulator
-	subb a, @R0 								; subtract a - @R0
-	jnc enc_a_cont3 							; jump to end if carry is not set
+	mov a, UPPER_BOUND 								; move UPPER_BOUND into accumulator
+	subb a, @R0 									; subtract a - @R0
+	jnc enc_a_cont3 								; jump to end if carry is not set
 		; if @R0 is greater than UPPER_BOUND:
-		mov @R0, LOWER_BOUND 					; rollover @R0
+		mov @R0, LOWER_BOUND 						; rollover @R0
 	enc_a_cont3:
 
 	; pop the original SFR values back into their place and restore their values
@@ -4257,7 +4346,7 @@ ENC_B:
 	push acc
 	push PSW
 
-	clr c 										; clear the carry bit
+	clr c 											; clear the carry bit
 
 	jnb P3.2, enc_b_cont0
 		setb B_FLAG
@@ -4275,7 +4364,7 @@ ENC_B:
 		setb B_FLAG
 	enc_b_cont1:
 
-	jnb INC_LEAP_YEAR?, enc_b_cont2				; check if INC_LEAP_YEAR? bit is set
+	jnb INC_LEAP_YEAR?, enc_b_cont2					; check if INC_LEAP_YEAR? bit is set
 		;if INC_LEAP_YEAR? bit is set, decrement @R0 (YEAR) three more times (for a total of 4 times) 
 		dec @R0
 		dec @R0
@@ -4283,20 +4372,20 @@ ENC_B:
 	enc_b_cont2:
 
 	; check if @R0 is less than LOWER_BOUND
-	mov a, @R0 									; move @R0 into accumulator
-	subb a, LOWER_BOUND 						; subtract a - LOWER_BOUND
-	jnc enc_b_cont4 							; jump to end if carry is not set
+	mov a, @R0 										; move @R0 into accumulator
+	subb a, LOWER_BOUND 							; subtract a - LOWER_BOUND
+	jnc enc_b_cont4 								; jump to end if carry is not set
 		; if @R0 is less than LOWER_BOUND:
-		mov @R0, UPPER_BOUND 					; rollover @R0
+		mov @R0, UPPER_BOUND 						; rollover @R0
 	enc_b_cont4:
 
 	; !! EDGE CASE: if the lower bound is zero, dec @R0 will rollover to 255, which still looks larger than LOWER_BOUND.
 	; check if @R0 is greater than UPPER_BOUND
-	mov a, UPPER_BOUND 							; move UPPER_BOUND into accumulator
-	subb a, @R0 								; subtract a - @R0
-	jnc enc_b_cont3 							; jump to end if carry is not set
+	mov a, UPPER_BOUND 								; move UPPER_BOUND into accumulator
+	subb a, @R0 									; subtract a - @R0
+	jnc enc_b_cont3 								; jump to end if carry is not set
 		; if @R0 is greater than UPPER_BOUND:
-		mov @R0, UPPER_BOUND 					; rollover @R0
+		mov @R0, UPPER_BOUND 						; rollover @R0
 	enc_b_cont3:
 
 	; pop the original SFR values back into their place and restore their values
