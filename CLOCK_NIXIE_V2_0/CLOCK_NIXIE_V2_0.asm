@@ -55,8 +55,8 @@ reti 							; exit
 ; Timer 2 interrupt
 .org 002Bh
 DISPLAY_ISR:
-	clr TF2					; clear timer 2 interrupt flag
-	lcall UPDATE_DISPLAYS 	; update the displays
+	clr TF2						; clear timer 2 interrupt flag
+	lcall UPDATE_DISPLAYS 		; update the displays
 reti 							; exit
 
 
@@ -98,6 +98,7 @@ INIT:
 	SET_ALARM_STATE equ 4
 	GPS_SYNC_STATE equ 5
 	SETTINGS_STATE equ 6
+	CYCLE_STATE equ 7
 	mov NEXT_CLOCK_STATE, #SHOW_TIME_STATE
 
 	mov TIMEOUT_LENGTH, #3Bh 			; (59 dec)
@@ -372,6 +373,11 @@ INIT:
 	mov NIX1, #00h
 	; Initialize the nixies
 	lcall NIX_RESET
+
+	; Stores the number to be shown when in CYCLE_STATE to prevent cathode poisoning
+	.equ CYCLE_NUMBER, 63h
+	mov CYCLE_NUMBER, #00h
+
 	; =============================
 
 	; ====== Decatron Variables ======
@@ -587,54 +593,59 @@ MAIN:
 
 	cjne a, #SHOW_TIME_STATE, main_cont0
 		lcall SHOW_TIME
-		sjmp main_cont5
+		sjmp main_cont6
 	main_cont0:
 
 	cjne a, #SET_TIME_STATE, main_cont1
 		lcall SET_TIME
-		sjmp main_cont5
+		sjmp main_cont6
 	main_cont1:
 
 	cjne a, #SHOW_ALARM_STATE, main_cont2
 		lcall SHOW_ALARM
-		sjmp main_cont5
+		sjmp main_cont6
 	main_cont2:
 
 	cjne a, #SET_ALARM_STATE, main_cont3
 		lcall SET_ALARM
-		sjmp main_cont5
+		sjmp main_cont6
 	main_cont3:
 
 	cjne a, #SETTINGS_STATE, main_cont4
 		lcall SETTINGS
-		sjmp main_cont5
+		sjmp main_cont6
 	main_cont4:
 
 	cjne a, #GPS_SYNC_STATE, main_cont5
 		lcall GPS_SYNC
+		sjmp main_cont6
 	main_cont5:
+
+	cjne a, #CYCLE_STATE, main_cont6
+		lcall CYCLE
+	main_cont6:
 
 	; ======================================
 	mov a, ALARM_STATE
 
-	cjne a, #ALARM_ENABLED_STATE, main_cont6
+	cjne a, #ALARM_ENABLED_STATE, main_cont7
 		lcall ALARM_ENABLED
-		sjmp main_cont9
-	main_cont6:
-
-	cjne a, #ALARM_DISABLED_STATE, main_cont7
-		lcall ALARM_DISABLED
-		sjmp main_cont9
+		sjmp main_cont10
 	main_cont7:
 
-	cjne a, #ALARM_FIRING_STATE, main_cont8
-		lcall ALARM_FIRING
-		sjmp main_cont9
+	cjne a, #ALARM_DISABLED_STATE, main_cont8
+		lcall ALARM_DISABLED
+		sjmp main_cont10
 	main_cont8:
 
-	cjne a, #ALARM_SNOOZING_STATE, main_cont9
-		lcall ALARM_SNOOZING
+	cjne a, #ALARM_FIRING_STATE, main_cont9
+		lcall ALARM_FIRING
+		sjmp main_cont10
 	main_cont9:
+
+	cjne a, #ALARM_SNOOZING_STATE, main_cont10
+		lcall ALARM_SNOOZING
+	main_cont10:
 sjmp MAIN
 
 
@@ -722,6 +733,16 @@ SHOW_TIME:
 						lcall ENTER_GPS_SYNC_STATE 						; transition to GPS_SYNC_STATE
 						sjmp show_time_cont1
 	show_time_cont2:
+
+	; Check if the minutes end in 3, if so, enter CYCLE_STATE
+	mov a, #03h 														; check if time to cycle
+	cjne a, MIN_ONES, show_time_cont9 									; compare cycle minute ones to current minute ones
+		mov a, #27h
+		cjne a, SECONDS, show_time_cont9 								; compare current seconds to 39 so it usually won't be
+																		; interrupted by a firing alarm (otherwise arbitrary)
+			lcall SHOW_TIME_STATE_TO_CYCLE_STATE 						; transition to CYCLE_STATE
+			ljmp show_time_cont1
+	show_time_cont9:
 
 	; check for a settings button press
 	lcall CHECK_FOR_SETTINGS_BUTTON_SHORT_PRESS
@@ -878,7 +899,6 @@ SET_ALARM:  ; has a sub-state machine with state variable SET_ALARM_SUB_STATE
 ret
 
 GPS_SYNC: 	; has a sub-state machine with state variable GPS_SYNC_SUB_STATE
-
 	mov a, GPS_SYNC_SUB_STATE
 
 	cjne a, #GPS_OBTAIN_FIX_STATE, gps_sync_cont0
@@ -989,6 +1009,29 @@ SETTINGS:    ; has a sub-state machine with state variable SETTINGS_SUB_STATE
 
 		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE	; if there was a timeout, go to SHOW_TIME state
 	settings_cont12:
+ret
+
+CYCLE:
+	; The accumulator holds the value all the nixies display.
+	mov NIX1, CYCLE_NUMBER
+	mov NIX2, CYCLE_NUMBER
+	mov NIX3, CYCLE_NUMBER
+	mov NIX4, CYCLE_NUMBER
+
+	lcall MED_DELAY
+
+	; Increment and check if CYCLE_NUMBER needs to wrap around from 9 to 0.
+	inc CYCLE_NUMBER
+	mov a, CYCLE_NUMBER
+	cjne a, #0Ah, cycle_cont0
+		mov CYCLE_NUMBER, #00h
+	cycle_cont0:
+
+	; Check for timeout event
+	mov a, TIMEOUT
+	cjne a, #00h, cycle_cont1
+		lcall CYCLE_STATE_TO_SHOW_TIME_STATE
+	cycle_cont1:
 ret
 
 ; ===== Set Time Sub-State Functions =======
@@ -1813,33 +1856,6 @@ ALARM_ENABLED:
 					; it is currently the right time to fire the alarm
 					; TODO:  check if we are in a set time or set alarm state, in which case don't fire the alarm (jump to alarm_enabled_cont1)
 
-					; check if CLOCK_STATE is GPS_SYNC_STATE
-					mov a, CLOCK_STATE
-					cjne a, #GPS_SYNC_STATE, alarm_enabled_cont2
-						; clock is currently syncing
-						lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE 		; abort the sync since the alarm has priority
-						clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
-																		; fill-up state, which we want to override with the below line's alarm
-																		; transition, which puts the decatron in fast mode
-					alarm_enabled_cont2:
-					; check if CLOCK_STATE is SHOW_ALARM_STATE
-					cjne a, #SHOW_ALARM_STATE, alarm_enabled_cont3
-						; clock is currently showing the alarm
-						lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE 		; move to show the time (which now matches the alarm time, so this might
-																		; not matter)
-						clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
-																		; fill-up state, which we want to override with the below line's alarm
-																		; transition, which puts the decatron in fast mode
-					alarm_enabled_cont3:
-					; check if CLOCK_STATE is SETTINGS_STATE
-					cjne a, #SETTINGS_STATE, alarm_enabled_cont4
-						; clock is currently in the settings menu
-						lcall SETTINGS_STATE_TO_SHOW_TIME_STATE 		; abort any settings changes since the alarm has priority
-						clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
-																		; fill-up state, which we want to override with the below line's alarm
-																		; transition, which puts the decatron in fast mode
-
-					alarm_enabled_cont4:
 					lcall ALARM_ENABLED_STATE_TO_ALARM_FIRING_STATE 	; transition to alarm firing state
 					sjmp alarm_enabled_cont1
 
@@ -1890,7 +1906,6 @@ ret
 ; ==========================================
 
 TIMER_0_SERVICE:
-	
 	; push any used SFRs onto the stack to preserve their values
 	push acc
 	push PSW
@@ -2023,6 +2038,10 @@ TIMER_0_SERVICE:
 			djnz DECATRON, timer_0_service_cont8 								; decrement DECATRON and check if reached zero
 				; mov DECATRON, #01h 												; to prevent decatron from blanking
 				lcall ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE 				; fire alarm
+				; At this point, the seconds should be incremented, but the above alarm transition overwrites TIMER_0_POST_SCALER
+				; before we have the chance to decrement and check if it is zero.  Thus, jump directly into the 1Hz portion of
+				; this function to avoid the bug of unintentionally delaying the time by a second.
+				ljmp timer_0_service_cont16
 		timer_0_service_cont8:
 
 	; ===========================================================
@@ -2041,6 +2060,7 @@ TIMER_0_SERVICE:
 	; ===========================================================
 	; Normal TIMER_0_ISR:
 	djnz TIMER_0_POST_SCALER, timer_0_service_cont1
+		timer_0_service_cont16:
 		; --- the following code is called at 1Hz ---
 		mov TIMER_0_POST_SCALER, TIMER_0_POST_SCALER_RELOAD 	; reload TIMER_0_POST_SCALER
 
@@ -2955,6 +2975,25 @@ ENTER_GPS_SYNC_STATE:
 	mov CLOCK_STATE, #GPS_SYNC_STATE
 ret
 
+SHOW_TIME_STATE_TO_CYCLE_STATE:
+	; set timeout (10 seconds)
+	mov TIMEOUT_LENGTH, #0Ah
+	mov TIMEOUT, TIMEOUT_LENGTH
+
+	; Start the cycle with the nixies all displaying 0s.
+	mov CYCLE_NUMBER, #00h
+
+	; Update CLOCK_STATE
+	mov CLOCK_STATE, #CYCLE_STATE
+ret
+
+CYCLE_STATE_TO_SHOW_TIME_STATE:
+	; Have the nixies display the time.  <-- Taken care of in SHOW_TIME
+
+	; Update CLOCK_STATE
+	mov CLOCK_STATE, #SHOW_TIME_STATE
+ret
+
 ; Alarm state machine transitions ========
 ALARM_DISABLED_STATE_TO_ALARM_ENABLED_STATE:
 	setb P1.6 									; turn on alarm light
@@ -2967,9 +3006,46 @@ ALARM_ENABLED_STATE_TO_ALARM_DISABLED_STATE:
 ret
 
 ALARM_ENABLED_STATE_TO_ALARM_FIRING_STATE:
-	clr P1.1 									; turn on buzzer.  NOTE: inverter between pin and buzzer (low = buzzing)
-	lcall ENTER_DECA_FAST_STATE 				; update DECA_STATE
-	mov ALARM_STATE, #ALARM_FIRING_STATE 		; update ALARM_STATE
+	; Alarm firing should send the clock in certain states back to SHOW_TIME.
+	; check if CLOCK_STATE is GPS_SYNC_STATE
+	mov a, CLOCK_STATE
+	cjne a, #GPS_SYNC_STATE, alarm_enabled_to_firing_cont2
+		; clock is currently syncing
+		lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE 		; abort the sync since the alarm has priority
+		clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+														; fill-up state, which we want to override with the below line's alarm
+														; transition, which puts the decatron in fast mode
+	alarm_enabled_to_firing_cont2:
+	; check if CLOCK_STATE is SHOW_ALARM_STATE
+	cjne a, #SHOW_ALARM_STATE, alarm_enabled_to_firing_cont3
+		; clock is currently showing the alarm
+		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE 		; move to show the time (which now matches the alarm time, so this might
+														; not matter)
+		clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+														; fill-up state, which we want to override with the below line's alarm
+														; transition, which puts the decatron in fast mode
+	alarm_enabled_to_firing_cont3:
+	; check if CLOCK_STATE is SETTINGS_STATE
+	cjne a, #SETTINGS_STATE, alarm_enabled_to_firing_cont4
+		; clock is currently in the settings menu
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE 		; abort any settings changes since the alarm has priority
+		clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+														; fill-up state, which we want to override with the below line's alarm
+														; transition, which puts the decatron in fast mode
+	alarm_enabled_to_firing_cont4:
+	; check if CLOCK_STATE is CYCLE_STATE
+	cjne a, #CYCLE_STATE, alarm_enabled_to_firing_cont5
+		; clock is currently cycling the nixies
+		lcall CYCLE_STATE_TO_SHOW_TIME_STATE 			; exit the nixie cycling early since the alarm has priority
+		clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+														; fill-up state, which we want to override with the below line's alarm
+														; transition, which puts the decatron in fast mode
+	alarm_enabled_to_firing_cont5:
+
+	clr P1.1 											; this turns ON the buzzer. NOTE: inverter between pin and buzzer (low = buzzing)
+														; the above line is DIFFERENT (as it should) than in ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE
+	lcall ENTER_DECA_FAST_STATE 						; update DECA_STATE
+	mov ALARM_STATE, #ALARM_FIRING_STATE 				; update ALARM_STATE
 ret
 
 ALARM_FIRING_STATE_TO_ALARM_DISABLED_STATE:
@@ -2995,7 +3071,44 @@ ALARM_SNOOZING_STATE_TO_ALARM_DISABLED_STATE:
 ret
 
 ALARM_SNOOZING_STATE_TO_ALARM_FIRING_STATE:
-	clr P1.1 									; turn on buzzer.  NOTE: inverter between pin and buzzer (low = buzzing)
+	; Alarm firing should send the clock in certain states back to SHOW_TIME.
+	; check if CLOCK_STATE is GPS_SYNC_STATE
+	mov a, CLOCK_STATE
+	cjne a, #GPS_SYNC_STATE, alarm_snoozing_to_firing_cont2
+		; clock is currently syncing
+		lcall GPS_SYNC_STATE_TO_SHOW_TIME_STATE 		; abort the sync since the alarm has priority
+		clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+														; fill-up state, which we want to override with the below line's alarm
+														; transition, which puts the decatron in fast mode
+	alarm_snoozing_to_firing_cont2:
+	; check if CLOCK_STATE is SHOW_ALARM_STATE
+	cjne a, #SHOW_ALARM_STATE, alarm_snoozing_to_firing_cont3
+		; clock is currently showing the alarm
+		lcall SHOW_ALARM_STATE_TO_SHOW_TIME_STATE 		; move to show the time (which now matches the alarm time, so this might
+														; not matter)
+		clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+														; fill-up state, which we want to override with the below line's alarm
+														; transition, which puts the decatron in fast mode
+	alarm_snoozing_to_firing_cont3:
+	; check if CLOCK_STATE is SETTINGS_STATE
+	cjne a, #SETTINGS_STATE, alarm_snoozing_to_firing_cont4
+		; clock is currently in the settings menu
+		lcall SETTINGS_STATE_TO_SHOW_TIME_STATE 		; abort any settings changes since the alarm has priority
+		clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+														; fill-up state, which we want to override with the below line's alarm
+														; transition, which puts the decatron in fast mode
+	alarm_snoozing_to_firing_cont4:
+	; check if CLOCK_STATE is CYCLE_STATE
+	cjne a, #CYCLE_STATE, alarm_snoozing_to_firing_cont5
+		; clock is currently cycling the nixies
+		lcall CYCLE_STATE_TO_SHOW_TIME_STATE 			; exit the nixie cycling early since the alarm has priority
+		clr DECA_IN_TRANSITION? 						; the previous line's clock transition puts the decatron in a temporary
+														; fill-up state, which we want to override with the below line's alarm
+														; transition, which puts the decatron in fast mode
+	alarm_snoozing_to_firing_cont5:
+
+	setb P1.1 									; this turns OFF the buzzer, but will get immediately turned on at the buzzer toggle
+												; in TIMER_0_SERVICE.  NOTE: inverter between pin and buzzer (low = buzzing)
 	lcall ENTER_DECA_FAST_STATE 				; update DECA_STATE
 	mov ALARM_STATE, #ALARM_FIRING_STATE 		; update ALARM_STATE
 ret
