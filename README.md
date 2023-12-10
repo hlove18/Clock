@@ -1,2 +1,2 @@
 # Clock
-Alarm clock using nixie tubes, a VFD, and a decatron.
+Alarm clock using nixie tubes, a VFD, and a decatron
