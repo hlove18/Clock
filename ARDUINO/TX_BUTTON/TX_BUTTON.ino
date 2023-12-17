@@ -30,7 +30,7 @@ void setup() {
   pinMode(RFM95_EN, OUTPUT);   
   pinMode(RFM95_RST, OUTPUT);
 
-  while (!Serial);
+  // while (!Serial);
   Serial.begin(9600);
   delay(100);
 
