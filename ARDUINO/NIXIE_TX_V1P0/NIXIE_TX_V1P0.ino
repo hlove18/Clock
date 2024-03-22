@@ -42,6 +42,9 @@ void setup() {
   digitalWrite(RED_LED_OFF, HIGH);
   digitalWrite(GREEN_LED_OFF, HIGH);
 
+  // Change the analogRead resolution to 12 bits
+  analogReadResolution(12);
+
   //while (!Serial);
   //Serial.begin(9600);
   //delay(100);
@@ -104,9 +107,10 @@ void transmit() {
 // Check battery and display if low voltage.
 void check_battery_status() {
   // Times 2 for voltage divider.
-  supply_voltage = 2 * (analogRead(POWER_VOLTAGE) * 3.3) / 1023;
+  // updated analogRead resolution to 12bits (as supported by qt py)
+  supply_voltage = 2 * (analogRead(POWER_VOLTAGE) * 3.3) / 4095;
 
-  //Serial.println(supply_voltage);
+  // Serial.println(supply_voltage);
 
   // Check if plugged in.
   if (supply_voltage > 4.5) {  // Plugged in.
@@ -124,7 +128,7 @@ void check_battery_status() {
   }
   else {  // Battery power.
     // Check if the battery voltage is low.  Discharge cut-off voltage is 3.0V.
-    if (supply_voltage < 3.2) { // Low battery.
+    if (supply_voltage < 3.425) { // Low battery; defined by LDO (AP2112-3.3) dropout voltage
       // Indicate low battery with red light.
       digitalWrite(RED_LED_OFF, LOW);
       digitalWrite(GREEN_LED_OFF, HIGH);

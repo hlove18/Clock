@@ -24,9 +24,9 @@ void setup() {
   // Note level shift (inverter) between this pin and the Nixie clock
   digitalWrite(remotePin, LOW);
 
-  while (!Serial);
-  Serial.begin(9600);
-  delay(100);
+  //while (!Serial);
+  //Serial.begin(9600);
+  //delay(100);
 
   // Enable the radio
   enable_radio();
