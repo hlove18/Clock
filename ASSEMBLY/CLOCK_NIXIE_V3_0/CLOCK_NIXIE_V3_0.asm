@@ -1605,11 +1605,15 @@ SETTINGS_SET_GPS_SYNC_HR:
     mov NIX1, b
     
     ; Split the hours
-    mov a, GPS_SYNC_TIME_HOURS
-    mov b, #0Ah
-    div ab
-    mov NIX4, a
-    mov NIX3, b
+    ; mov a, GPS_SYNC_TIME_HOURS
+    ; mov b, #0Ah
+    ; div ab
+    ; mov NIX4, a --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+    ; mov NIX3, b --> This is taken care of in TWLV_TWFR_HOUR_ADJ
+
+    ; Update the hours if 12/24 hour switch is flipped
+    mov R1, #6Dh        ; move the address of GPS_SYNC_TIME_HOURS into R1 (for TWLV_TWFR_HOUR_ADJ)
+    lcall TWLV_TWFR_HOUR_ADJ
 
     ; check for a rotary encoder short press
     lcall CHECK_FOR_ROT_ENC_SHORT_PRESS
